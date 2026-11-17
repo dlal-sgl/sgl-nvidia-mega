@@ -183,6 +183,8 @@ class DraftLayersOnChain:
 
     widths: tuple[int, ...] = ()
     draft_sampler = None
+    # no speculative runtime hooks factory: SGLang keeps its own strategies
+    speculative_runtime_hooks = None
     draft_loop = draft_extend = begin_draft_round = graph_variants = (
         None  # SGLang's own paths
     )

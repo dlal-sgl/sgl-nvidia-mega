@@ -159,6 +159,8 @@ class _Built:
     draft_sampler = None
     # Megakernel API 2: no EAGLE entries, no graph variants of the host's runners.
     draft_loop = draft_extend = begin_draft_round = graph_variants = None
+    # no speculative runtime hooks factory: SGLang keeps its own strategies
+    speculative_runtime_hooks = None
 
     def __init__(self, model: Any, resources: Any, widths: tuple[int, ...]):
         from .executor import KimiK3MegakernelExecutor

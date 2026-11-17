@@ -17,6 +17,11 @@ from .verify_contract import supported_query_width, verify_keys
 from .verify_executor import K31VerifyExecutor
 from .verify_indexer import IndexKeyWeights, PreparedVerifyIndexKey
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "srt/runtime_context.py": ("get_parallel",),
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +97,8 @@ class BuiltK31Verify:
     tensor_binding_kind = 31
     draft_sampler = None
     draft_loop = draft_extend = begin_draft_round = graph_variants = None
+    # no speculative runtime hooks factory: SGLang keeps its own strategies
+    speculative_runtime_hooks = None
 
     def __init__(self, weights, deadline_s):
         from .verify_weights import WeightModel

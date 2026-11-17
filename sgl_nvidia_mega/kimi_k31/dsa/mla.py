@@ -8,6 +8,14 @@ import torch
 from ..verify_contract import Q8_REQUEST_BATCHES
 from .scratch import row_buffer
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "srt/layers/attention/dsa/dsa_dcp.py": (
+        "trtllm_rows_per_call",
+        "dcp_trtllm_sparse_attention",
+    ),
+}
+
 
 @cache
 def _workspace(device):

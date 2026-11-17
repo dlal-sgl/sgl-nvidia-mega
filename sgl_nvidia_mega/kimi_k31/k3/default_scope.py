@@ -8,6 +8,16 @@ from __future__ import annotations
 
 import os
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "srt/runtime_context.py": (
+        "get_context",
+        "get_parallel",
+        "get_schedule",
+        "get_spec",
+    ),
+}
+
 _SCOPE: list = []  # [in scope], once the config is published
 
 

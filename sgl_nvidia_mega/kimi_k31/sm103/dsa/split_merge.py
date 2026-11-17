@@ -15,6 +15,15 @@ import sglang
 import torch
 from sglang.kernels.jit.utils import cache_once, load_jit, make_cpp_args
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/jit/utils/__init__.py": (
+        "cache_once",
+        "load_jit",
+        "make_cpp_args",
+    ),
+}
+
 if TYPE_CHECKING:
     from tvm_ffi.module import Module
 

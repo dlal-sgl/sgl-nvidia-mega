@@ -16,6 +16,13 @@ import torch
 
 from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/ops/attention/dsa/paged_mqa_logits.py": ("_restore_row_stride",),
+    "kernels/ops/attention/dsv4/topk.py": ("topk_transform_paged_candidates_v2",),
+    "srt/layers/attention/dsa/dsa_dcp_sharded.py": ("DcpTopKMerge",),
+}
+
 PAGE, PAGE_BITS, TOPK = 64, 6, 2048
 # Context guard: split a forward only when its longest causal length reaches this; below it the replicated
 # path is faster (the split's local logits + top-k + merge are a fixed cost). 320000 by default in

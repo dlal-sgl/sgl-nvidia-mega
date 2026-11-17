@@ -4,6 +4,11 @@
 from functools import cache
 from pathlib import Path
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/jit/utils/__init__.py": ("load_jit",),
+}
+
 
 @cache
 def _load():

@@ -37,6 +37,25 @@ except ModuleNotFoundError:  # SGLang before sgl-project/sglang#45389
         Step,
     )
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/plugin_kernels/nvidia/spec.py|srt/megakernels/spec.py": (
+        "BuildContext",
+        "BuiltMegakernel",
+        "Feature",
+        "MegakernelSpec",
+        "Numerics",
+        "NumericsKind",
+        "Requirements",
+        "Step",
+    ),
+    "srt/kernel_plugins/nvidia/binding.py|srt/megakernels/binding.py": (
+        "HybridPoolView",
+        "HybridStepView",
+        "PreparationView",
+    ),
+}
+
 __all__ = [
     "BuildContext",
     "BuiltMegakernel",

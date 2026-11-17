@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from functools import cache
 
 import cutlass.cute as cute
+import sglang.srt.layers.attention.dsa.dsa_dcp_sharded as DCP_SHARDED
 import torch
 from cutlass.cute.runtime import make_fake_stream
 from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
@@ -22,7 +23,6 @@ from sglang.srt.distributed.device_communicators.triton_symm_mem_ag import (
     create_state,
 )
 from sglang.srt.distributed.parallel_state import in_the_same_node_as
-from sglang.srt.layers.attention.dsa import dsa_dcp_sharded as DCP_SHARDED
 from sglang.srt.runtime_context import get_parallel
 
 from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
@@ -35,6 +35,33 @@ from ..verify_spec import BuiltK31Verify
 from .indexer import IndexProjection, IndexWeights
 from .mla import CpSparseMla, SparseMla
 from .scratch import RowScratch, row_buffer
+
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "srt/distributed/device_communicators/custom_all_reduce_utils.py": (
+        "is_one_nvlink_clique",
+    ),
+    "srt/distributed/device_communicators/triton_symm_mem_ag.py": (
+        "all_gather_inner",
+        "create_state",
+    ),
+    "srt/distributed/parallel_state.py": (
+        "in_the_same_node_as",
+        "get_tp_group",
+    ),
+    "srt/runtime_context.py": ("get_parallel",),
+    "kernels/ops/attention/dsa/paged_mqa_logits.py": ("_restore_row_stride",),
+    "kernels/ops/attention/dsv4/topk.py": ("topk_transform_paged_v2",),
+    "srt/layers/attention/dsa/dsa_dcp_sharded.py": (
+        "dcp_global_topk",
+        "dcp_localize_compact",
+        "_TOPK_MERGE",
+    ),
+    "srt/layers/dcp/comm.py": ("dcp_a2a_lse_reduce",),
+    "kernels/ops/kvcache/dsa_fused_store_index_cache.py": (
+        "fused_store_index_k_cache",
+    ),
+}
 
 logger = logging.getLogger(__name__)
 

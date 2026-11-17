@@ -6,6 +6,13 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/ops/kvcache/dsa_fused_store_index_cache.py": (
+        "fused_store_index_k_cache",
+    ),
+}
+
 
 @dataclass(frozen=True)
 class IndexKeyWeights:

@@ -11,6 +11,13 @@ import torch
 
 from .scratch import row_buffer
 
+# Names read from SGLang. A contract test checks these before GPU use.
+SGLANG_READS = {
+    "kernels/ops/attention/dsa/head_gate.py": ("indexer_q_quant_head_gate",),
+    "kernels/ops/attention/dsa/paged_mqa_logits.py": ("_restore_row_stride",),
+    "kernels/ops/attention/dsv4/topk.py": ("topk_transform_paged_v2",),
+}
+
 
 @dataclass(frozen=True)
 class IndexWeights:
