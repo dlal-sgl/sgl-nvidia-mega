@@ -212,7 +212,6 @@ _EARLY_QAG_LOGGED = []
 # Opt-in DCP8/TP8 transport only: preserve the early/legacy stream order, but
 # multicast each rank's 12 FP8 heads directly into the core's 128-head layout.
 DSA_DIRECT_QAG = os.environ.get("K31MK_DSA_DIRECT_QAG", "0") == "1"
-DSA_TRT_REDUCER = os.environ.get("K31MK_DSA_TRT_REDUCER", "0") == "1"
 _DIRECT_QAG_LOGGED = []
 # ``K31MK_MLAQ_AFTER_SCORING`` (on by default in the GB300 BEST scope, kimi_k31/k3/default_scope.py; 0 = off), DCP1 steps on the stock scoring only
 # (not DCP, not the context-split indexer): the MLA query waits for the indexer scoring (DeepGEMM paged logits) and
@@ -531,18 +530,6 @@ class PreparedSparseVerifyMla:
             gathered.view(rows, heads, 576)
         )
 
-    def _trt_reducer(self, rows, q):
-        parallel = get_parallel()
-        return (
-            DSA_TRT_REDUCER
-            and rows in (15, 20, 25, 30)
-            and q == 5
-            and self.dcp_size == 8
-            and parallel.tp_size == 8
-            and self.base.heads == 12
-            and parallel.dcp_comm_backend == "fi_a2a"
-        )
-
     def merge_heads(self, out, lse):
         """Each head owner's rows from every rank's partials (stock a2a LSE reduce, base-2)."""
         from sglang.srt.layers.dcp.comm import dcp_a2a_lse_reduce
@@ -660,11 +647,7 @@ class PreparedSparseVerifyMla:
         if dcp:
             local_rows, counts = selected
             partial, lse = self.cp_mla.run_core(
-                cache,
-                local_rows,
-                counts,
-                b.stock_scales,
-                trt_reducer=self._trt_reducer(rows, q),
+                cache, local_rows, counts, b.stock_scales
             )
             self.cp_latent = latent = self.merge_heads(partial, lse)
             value = self.cp_values[rows, q]

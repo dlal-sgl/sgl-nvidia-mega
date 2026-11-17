@@ -133,12 +133,7 @@ class CpSparseMla:
         )
         self.query_starts = torch.arange(rows + 1, dtype=torch.int32, device=device)
 
-    def run_core(self, cache, local_rows, counts, scales, *, trt_reducer=False):
-        if trt_reducer:
-            from ..sm103.dsa.trt_reducer import run_reducer_mla
-
-            return run_reducer_mla(self, cache, local_rows, counts, scales)
-
+    def run_core(self, cache, local_rows, counts, scales):
         from sglang.srt.layers.attention.dsa.dsa_dcp import dcp_trtllm_sparse_attention
 
         return dcp_trtllm_sparse_attention(
