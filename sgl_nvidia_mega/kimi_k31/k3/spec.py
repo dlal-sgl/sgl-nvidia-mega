@@ -254,7 +254,7 @@ def _build(model: Any, hf_config: Any, context: BuildContext) -> _Built:
 SPEC = MegakernelSpec(
     name="Kimi K3 packed-MXFP4",
     requires=Requirements(
-        isas=frozenset({"sm_103", "sm_107"}),
+        isas=frozenset({"sm_103"}),
         tp_sizes=frozenset({8, 16}),
         resident_blocks=152,
         dtypes=frozenset({"bfloat16"}),
