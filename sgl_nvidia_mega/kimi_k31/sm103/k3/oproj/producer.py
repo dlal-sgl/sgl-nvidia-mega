@@ -295,13 +295,19 @@ class OprojProducer:
             scale = mx_exponent(cute.arch.fmax(top, Float32(1e-10)))
             reciprocal = mx_rescale(scale)
             words = [
-                canon_fp8(pack_fp8(tuple(reduced[4 * j + i] * reciprocal for i in range(4))))
+                canon_fp8(
+                    pack_fp8(tuple(reduced[4 * j + i] * reciprocal for i in range(4)))
+                )
                 for j in range(2)
             ]
-            upper = cute.arch.shuffle_sync(Uint32(scale), tid % 32 + 4)  # lane 8t: block 1
+            upper = cute.arch.shuffle_sync(
+                Uint32(scale), tid % 32 + 4
+            )  # lane 8t: block 1
             if token < count:
                 out_col = (cta * 4 + row_tile) * 16 + out_half * 8
-                offset = cute.crd2idx((slot, first + token, out_col // 2), mailbox.layout)
+                offset = cute.crd2idx(
+                    (slot, first + token, out_col // 2), mailbox.layout
+                )
                 multicast_words(mc + Int64(offset) * 2, words)
                 if tid % 8 == 0:
                     column = FP8_SCALE_COL + cta * 2

@@ -6,14 +6,10 @@ from __future__ import annotations
 from typing import Any
 
 import msgspec
-from sgl_nvidia_mega.kimi_k31.k3._host import BuildContext, MegakernelSpec, Feature
 from sglang.srt.runtime_context import get_model, get_parallel
 
-from .dsa.verify import build_from_tensors
-
-from sgl_nvidia_mega.kimi_k31.k3.spec import (
-    SPEC as K3_SPEC,
-)
+from sgl_nvidia_mega.kimi_k31.k3._host import BuildContext, Feature, MegakernelSpec
+from sgl_nvidia_mega.kimi_k31.k3.spec import SPEC as K3_SPEC
 from sgl_nvidia_mega.kimi_k31.k3.spec import (
     WIDTHS,
     _Built,
@@ -22,6 +18,8 @@ from sgl_nvidia_mega.kimi_k31.k3.spec import (
 from sgl_nvidia_mega.kimi_k31.k3.spec import (
     _model_disable_reasons as _k3_model_disable_reasons,
 )
+
+from .dsa.verify import build_from_tensors
 
 SGLANG_READS = {
     "kernels/plugin_kernels/nvidia/spec.py|srt/megakernels/spec.py": (
@@ -40,7 +38,12 @@ SGLANG_READS = {
         "enable_linear_replayssm_spec",
     ),
     "srt/models/kimi_k3.py": ("KimiK31ForConditionalGeneration",),
-    "srt/kernel_plugins/nvidia/binding.py|srt/megakernels/binding.py": ("hybrid", "indexer", "caches", "page_size"),
+    "srt/kernel_plugins/nvidia/binding.py|srt/megakernels/binding.py": (
+        "hybrid",
+        "indexer",
+        "caches",
+        "page_size",
+    ),
 }
 
 
@@ -63,7 +66,12 @@ def _dsa_reasons(text: Any) -> list[str]:
     }
     # An absent key reads as SGLang's behaviour without it: the defaults of configs/kimi_linear.py
     # _init_dsa, and SGLang never reads indexer_use_fp8 (its indexer is BF16). The rest are required.
-    absent = {"index_rope_dim": 0, "index_k_norm_type": "layernorm", "index_topk_freq": 1, "indexer_use_fp8": False}
+    absent = {
+        "index_rope_dim": 0,
+        "index_k_norm_type": "layernorm",
+        "index_topk_freq": 1,
+        "indexer_use_fp8": False,
+    }
     reasons = [
         f"Kimi K3.1 dsa_config.{key} must be {value!r}, got {dsa.get(key, absent.get(key))!r}"
         for key, value in expected.items()
@@ -81,7 +89,9 @@ def _dsa_reasons(text: Any) -> list[str]:
 
 def _context_reasons(context_length: int, text: Any) -> list[str]:
     if context_length <= 0:
-        return [f"Kimi K3.1 decode requires positive context_length, got {context_length}"]
+        return [
+            f"Kimi K3.1 decode requires positive context_length, got {context_length}"
+        ]
     return []
 
 
@@ -92,8 +102,10 @@ def _config_disable_reasons(cfg: Any, hf_config: Any) -> list[str]:
 
         return _dsa_reasons(text) + config_disable_reasons(cfg, hf_config)
     reasons = _dsa_reasons(text) + _context_reasons(int(cfg.context_length or 0), text)
-    if (getattr(cfg, "dcp_size", 1) or 1) > 1 or (getattr(cfg, "attn_cp_size", 1) or 1) > 1 or getattr(
-        cfg, "enable_prefill_cp", False
+    if (
+        (getattr(cfg, "dcp_size", 1) or 1) > 1
+        or (getattr(cfg, "attn_cp_size", 1) or 1) > 1
+        or getattr(cfg, "enable_prefill_cp", False)
     ):
         reasons.append("non-spec K31 decode does not support context parallel")
     if cfg.disaggregation_mode != "null":
@@ -184,8 +196,8 @@ def _build(model: Any, hf_config: Any, context: BuildContext) -> _BuiltK31:
     from sgl_nvidia_mega.kimi_k31.k3.projection_storage import rank_heads
     from sgl_nvidia_mega.kimi_k31.k3.providers import _cuda_memory, build_resources
 
-    from .sm103.folded_index import PreparedIndexMla
     from .projection_storage import coalesce_index_projection, pitch
+    from .sm103.folded_index import PreparedIndexMla
 
     validate_runtime_compatibility()
     resources = build_resources(
@@ -205,8 +217,13 @@ SPEC: MegakernelSpec = msgspec.structs.replace(
     name="Kimi K3.1 packed-MXFP4 decode / TARGET_VERIFY Q8/Q16 (opt-in Q5)",
     # Decode context parallel only for TARGET_VERIFY (DCP8 at TP8, DCP16 at TP16) and PD only
     # in the decode role; verify_spec refuses the rest.
-    features=K3_SPEC.features | frozenset(
-        {Feature.SPECULATIVE_DECODING, Feature.CONTEXT_PARALLEL, Feature.PD_DISAGGREGATION}
+    features=K3_SPEC.features
+    | frozenset(
+        {
+            Feature.SPECULATIVE_DECODING,
+            Feature.CONTEXT_PARALLEL,
+            Feature.PD_DISAGGREGATION,
+        }
     ),
     tensor_verify_binding_kind=31,
     tensor_verify_build=build_from_tensors,

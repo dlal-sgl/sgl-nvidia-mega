@@ -27,12 +27,16 @@ CLUSTER_FLOOR = 16384
 # buffer and are redone exact on one block; 11 / 12 bits narrow the bin 2x / 4x. 12 in the BEST scope, else 10.
 COARSE_BITS = int(best_default("K31MK_INDEX_SPLIT_COARSE_BITS", "12", "10"))
 if COARSE_BITS not in (10, 11, 12):
-    raise ValueError(f"K31MK_INDEX_SPLIT_COARSE_BITS must be 10, 11 or 12, got {COARSE_BITS}")
+    raise ValueError(
+        f"K31MK_INDEX_SPLIT_COARSE_BITS must be 10, 11 or 12, got {COARSE_BITS}"
+    )
 
 
 def overflow_rows(device):
     """int32 [1]: local rows whose clustered top-k overflowed its tie buffer and was redone exact, this run."""
-    index = torch.device("cuda", device).index if isinstance(device, int) else device.index
+    index = (
+        torch.device("cuda", device).index if isinstance(device, int) else device.index
+    )
     return _overflow_rows(torch.cuda.current_device() if index is None else index)
 
 
@@ -59,7 +63,9 @@ class LocalIndexer:
         rows = requests * query_width
         self.local_pages = -(-max_pages // world)
         self.global_page = torch.arange(self.local_pages, device=device) * world + rank
-        self.local_table = torch.zeros(requests, self.local_pages, dtype=torch.int32, device=device)
+        self.local_table = torch.zeros(
+            requests, self.local_pages, dtype=torch.int32, device=device
+        )
         # [local contexts; local causal lengths], computed in one pass
         self.local_both = torch.zeros(2, rows, dtype=torch.int32, device=device)
         self.local_contexts = self.local_both[0].view(requests, query_width)
@@ -75,30 +81,53 @@ class LocalIndexer:
         Pages past the table repeat its last column; they lie beyond every local length, never read."""
         import deep_gemm
 
-        torch.index_select(table, 1, self.global_page.clamp(max=table.shape[1] - 1), out=self.local_table)
+        torch.index_select(
+            table,
+            1,
+            self.global_page.clamp(max=table.shape[1] - 1),
+            out=self.local_table,
+        )
         both = torch.stack((step.score_contexts.reshape(-1), step.causal_lengths))
         self.local_both.copy_(local_length(both, self.rank, self.world))
         # the SM count fp8_paged_mqa_logits runs on, as stock's resolve_num_sms
-        self.schedule = deep_gemm.get_paged_mqa_logits_metadata(self.local_contexts, PAGE, deep_gemm.get_num_sms())
+        self.schedule = deep_gemm.get_paged_mqa_logits_metadata(
+            self.local_contexts, PAGE, deep_gemm.get_num_sms()
+        )
         self.prepared_for = step
 
     def run(self, query, gates, cache, table, step):
         import deep_gemm
-        from sglang.kernels.ops.attention.dsa.paged_mqa_logits import _restore_row_stride
-        from sglang.kernels.ops.attention.dsv4.topk import topk_transform_paged_candidates_v2
+        from sglang.kernels.ops.attention.dsa.paged_mqa_logits import (
+            _restore_row_stride,
+        )
+        from sglang.kernels.ops.attention.dsv4.topk import (
+            topk_transform_paged_candidates_v2,
+        )
 
         if self.prepared_for is not step:
             self.prepare(table, step)
         scores = deep_gemm.fp8_paged_mqa_logits(
-            query.view(step.batch_requests, step.query_width, 32, 128), cache.view(-1, PAGE, 1, 132),
-            gates.squeeze(-1), self.local_contexts, self.local_table, self.schedule,
-            self.local_pages * PAGE, clean_logits=False,
+            query.view(step.batch_requests, step.query_width, 32, 128),
+            cache.view(-1, PAGE, 1, 132),
+            gates.squeeze(-1),
+            self.local_contexts,
+            self.local_table,
+            self.schedule,
+            self.local_pages * PAGE,
+            clean_logits=False,
         )
         self.scores = _restore_row_stride(scores)
         topk_transform_paged_candidates_v2(
-            self.scores, self.local_lengths, out_candidates=self.candidates, world=self.world,
-            rank=self.rank, deterministic=True, cluster_floor=CLUSTER_FLOOR, page_bits=PAGE_BITS,
-            overflow_rows=self.overflow_rows, coarse_bits=COARSE_BITS,
+            self.scores,
+            self.local_lengths,
+            out_candidates=self.candidates,
+            world=self.world,
+            rank=self.rank,
+            deterministic=True,
+            cluster_floor=CLUSTER_FLOOR,
+            page_bits=PAGE_BITS,
+            overflow_rows=self.overflow_rows,
+            coarse_bits=COARSE_BITS,
         )
         return self.candidates
 
@@ -114,7 +143,8 @@ class SplitMerge:
         # Match the allocation factory without importing its private cand_k.
         self.cand_k = (
             (self.merge.buffer.numel() // (2 * max_rows) - TOPK) // group.world_size
-            if self.merge is not None else 0
+            if self.merge is not None
+            else 0
         )
 
     def usable(self, rows):
@@ -128,10 +158,19 @@ class SplitMerge:
             raise RuntimeError("Context-split merge is unavailable")
         merge = self.merge
         dcp_topk_merge(
-            candidates, causal_lengths, row_table, buffer=merge.buffer,
-            multicast_ptr=merge.multicast_ptr, peer_ptrs=merge.peer_ptrs,
-            counters=merge.counters, union_scratch=merge.union_scratch,
-            out_slots=out, out_fallback=merge.fallback[:out.shape[0]],
-            rank=merge.dcp_rank, span=PAGE, cand_k=self.cand_k, split=True,
+            candidates,
+            causal_lengths,
+            row_table,
+            buffer=merge.buffer,
+            multicast_ptr=merge.multicast_ptr,
+            peer_ptrs=merge.peer_ptrs,
+            counters=merge.counters,
+            union_scratch=merge.union_scratch,
+            out_slots=out,
+            out_fallback=merge.fallback[: out.shape[0]],
+            rank=merge.dcp_rank,
+            span=PAGE,
+            cand_k=self.cand_k,
+            split=True,
         )
         return out

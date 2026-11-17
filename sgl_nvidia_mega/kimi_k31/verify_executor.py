@@ -27,12 +27,23 @@ INSTANCES: list = []
 
 
 class K31VerifyExecutor:
-    def __init__(self, resources, indexers, capture_layers, *, query_width=8, request_batches=(1,)):
-        self.compile_keys = tuple((b, q) for b, q, _ in verify_keys(query_width, request_batches))
+    def __init__(
+        self,
+        resources,
+        indexers,
+        capture_layers,
+        *,
+        query_width=8,
+        request_batches=(1,),
+    ):
+        self.compile_keys = tuple(
+            (b, q) for b, q, _ in verify_keys(query_width, request_batches)
+        )
         self.resources, self.indexers = resources, indexers
         self.mla_index_overlap = (
             VerifyMlaIndexOverlap(resources.scratch["hidden.0"].device)
-            if query_width == 8 else None
+            if query_width == 8
+            else None
         )
         self.capture_layers = tuple(capture_layers)
         self.layers = tuple(
@@ -44,10 +55,14 @@ class K31VerifyExecutor:
             consumer = (
                 resources.final if layer_id == 92 else resources.before[layer_id + 1]
             )
-            consumer.bind_aux(mixture=True, **({"side": True} if AUX_SIDE_STREAM else {}))
+            consumer.bind_aux(
+                mixture=True, **({"side": True} if AUX_SIDE_STREAM else {})
+            )
             self.capture_consumers[layer_id] = consumer
         if AUX_SIDE_STREAM and self.capture_layers:
-            logger.info("NVIDIA megakernel: verify aux mixture on a side stream (K31MK_AUX_SIDE_STREAM)")
+            logger.info(
+                "NVIDIA megakernel: verify aux mixture on a side stream (K31MK_AUX_SIDE_STREAM)"
+            )
         # Q rows use generic routing/dispatch even at c1. SmallBatchChain consumes
         # a B1-specific producer mailbox and cannot represent one Q-token request.
         for _, feed in resources.feed_forward.items():
@@ -68,9 +83,7 @@ class K31VerifyExecutor:
         if embeddings.dtype != torch.bfloat16 or embeddings.shape != (r, 7168):
             raise ValueError("K31 verify requires TP-reduced BF16 embeddings [R,7168]")
         if (view.batch_requests, q) not in self.compile_keys:
-            raise ValueError(
-                "K31 verify requires a prepared request/query key"
-            )
+            raise ValueError("K31 verify requires a prepared request/query key")
         prefix, blocks = res.scratch["prefix"][:r], res.scratch["blocks"][:r]
         first, second = res.scratch["hidden.0"][:r], res.scratch["hidden.1"][:r]
         output = res.scratch["hidden.out"][:r]
@@ -114,7 +127,9 @@ class K31VerifyExecutor:
                     projected, local, pools=self.kda_pools[layer_id], step=view.kda
                 )
             if AUX_SIDE_STREAM:
-                join_aux(torch.cuda.current_stream())  # the o-proj rewrites the prefix row
+                join_aux(
+                    torch.cuda.current_stream()
+                )  # the o-proj rewrites the prefix row
             attn.output.run(local, prefix, blocks, second)
             if attn.kind == "mla" and overlap is not None:
                 # feed.run may overwrite first, including through fused consumers.
@@ -134,5 +149,7 @@ class K31VerifyExecutor:
         if not ready:
             res.final.run(hidden, prefix, blocks, output, aux=self._aux(view, 92))
         if AUX_SIDE_STREAM:
-            join_aux(torch.cuda.current_stream())  # the draft reads aux_hidden after the step
+            join_aux(
+                torch.cuda.current_stream()
+            )  # the draft reads aux_hidden after the step
         return output, view.aux_hidden

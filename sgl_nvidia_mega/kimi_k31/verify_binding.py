@@ -88,9 +88,16 @@ class VerifyStepView:
         if self.abi_version != 1 or b < 1 or q < 1 or r != b * q:
             raise ValueError("K31 verify ABI or request/query/row axes disagree")
         self.kda.validate()
-        if (self.kda.batch_requests, self.kda.query_width, self.kda.row_count) != (b, q, r):
+        if (self.kda.batch_requests, self.kda.query_width, self.kda.row_count) != (
+            b,
+            q,
+            r,
+        ):
             raise ValueError("K31 and KDA verify axes must match")
-        if self.block_table.dtype != torch.int32 or self.sequence_lengths.dtype != torch.int32:
+        if (
+            self.block_table.dtype != torch.int32
+            or self.sequence_lengths.dtype != torch.int32
+        ):
             raise ValueError("verify page table and sequence lengths must be int32")
         if self.write_slots.dtype != torch.int64:
             raise ValueError("verify cache write slots must be int64[R]")
@@ -103,7 +110,9 @@ class VerifyStepView:
         ):
             raise ValueError("K31 verify cache writes/aux must have token rows")
         if auxiliary_width is not None and self.aux_hidden.shape[1] != auxiliary_width:
-            raise ValueError("K31 verify aux width must match the configured capture layers")
+            raise ValueError(
+                "K31 verify aux width must match the configured capture layers"
+            )
         if self.aux_hidden.dtype != torch.bfloat16 or self.aux_hidden.stride(1) != 1:
             raise ValueError("K31 verify aux must have contiguous BF16 feature rows")
 
@@ -144,4 +153,6 @@ class VerifyWeights:
 
     def __post_init__(self):
         if self.request_batches is None:
-            object.__setattr__(self, "request_batches", served_request_batches(self.query_width))
+            object.__setattr__(
+                self, "request_batches", served_request_batches(self.query_width)
+            )

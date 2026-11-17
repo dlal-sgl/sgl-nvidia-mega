@@ -54,7 +54,14 @@ DELTA = 2 * TAPS * GROUPS  # 1792: δ row [side, tap, group]
 
 @cute.jit
 def conv8(
-    x, prev, base, delta, row, side: cutlass.Constexpr[int], group, live_prev,
+    x,
+    prev,
+    base,
+    delta,
+    row,
+    side: cutlass.Constexpr[int],
+    group,
+    live_prev,
     permuted: cutlass.Constexpr[bool] = False,
 ):
     """Side ``side`` conv of 8 channels of one group: (base[0] + δ0) x + (base[1] + δ1) prev,
@@ -185,7 +192,9 @@ class EmbedNorm:
 
     @cute.kernel
     def kernel(self, args):
-        ids, embed, mask_row, weight, box, mc, vocab_start, residual, out, eps = args[0:10]
+        ids, embed, mask_row, weight, box, mc, vocab_start, residual, out, eps = args[
+            0:10
+        ]
         row, _, _ = cute.arch.block_idx()
         tid, _, _ = cute.arch.thread_idx()
         lane, warp = tid % 32, tid // 32
@@ -350,7 +359,14 @@ class DraftFused:
     prefix receives the BF16 all-reduce sum itself and no residual is added."""
 
     def __init__(
-        self, k, *, silu, conv=True, deadline_ns=0, has_delta=True, permuted=False,
+        self,
+        k,
+        *,
+        silu,
+        conv=True,
+        deadline_ns=0,
+        has_delta=True,
+        permuted=False,
         delay_ns=0,
     ):
         self.delay_ns = delay_ns  # race tests: hold the residual write back

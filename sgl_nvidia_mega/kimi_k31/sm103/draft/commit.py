@@ -104,7 +104,13 @@ class KdaCommit:
     def __init__(self, layers, heads, k_heads, dim, ring, conv_elems, track_interval):
         if dim != 128 or heads % k_heads or conv_elems % 8:
             raise ValueError("KdaCommit serves head dim 128 and 16-byte conv rows")
-        self.layers, self.heads, self.k_heads, self.dim, self.ring = layers, heads, k_heads, dim, ring
+        self.layers, self.heads, self.k_heads, self.dim, self.ring = (
+            layers,
+            heads,
+            k_heads,
+            dim,
+            ring,
+        )
         self.conv_elems, self.track_interval = conv_elems, track_interval
 
     @cute.jit
@@ -118,7 +124,14 @@ class KdaCommit:
         temporal_layer, rawk_layer, rawv_layer, gk_layer, beta_layer = args[5:10]
         slots, commit_lens, prefix_lens, track_slots = args[10:14]
         conv, conv_layer, conv_slot, conv_slots = args[14:18]
-        window, window_layer, window_request, window_step, window_requests, window_steps = args[18:24]
+        (
+            window,
+            window_layer,
+            window_request,
+            window_step,
+            window_requests,
+            window_steps,
+        ) = args[18:24]
         head_layer, half, request = cute.arch.block_idx()
         tid, _, _ = cute.arch.thread_idx()
         warp, lane = tid // 32, tid % 32
@@ -133,7 +146,22 @@ class KdaCommit:
         column0 = half * COLUMNS + warp * WARP_COLUMNS
         state = self.head_state(temporal, temporal_layer, layer, slot, head)
         if slot >= 0:
-            self.prefetch(args, kn, decay, values, betas, h, layer, head, half, slot, state, column0, warp, lane)
+            self.prefetch(
+                args,
+                kn,
+                decay,
+                values,
+                betas,
+                h,
+                layer,
+                head,
+                half,
+                slot,
+                state,
+                column0,
+                warp,
+                lane,
+            )
         cute.arch.sync_threads()
         cute.arch.griddepcontrol_wait()
         cute.arch.griddepcontrol_launch_dependents()
@@ -154,29 +182,84 @@ class KdaCommit:
                 if Int64(step) < commit:
                     self.fold_step(h, kn, decay, values, betas, step, warp, lane)
                     if (Int64(step) == track_step) & (track >= 0):
-                        self.store_columns(self.head_state(temporal, temporal_layer, layer, track, head),
-                                           h, column0, lane)
+                        self.store_columns(
+                            self.head_state(
+                                temporal, temporal_layer, layer, track, head
+                            ),
+                            h,
+                            column0,
+                            lane,
+                        )
             self.store_columns(state, h, column0, lane)
         # conv: this CTA's share of the layer's [K-1, dim] window (rollback, then track)
         parts = self.heads * (self.dim // COLUMNS)
-        first, count = split(self.conv_elems // 8, head * (self.dim // COLUMNS) + half, parts)
+        first, count = split(
+            self.conv_elems // 8, head * (self.dim // COLUMNS) + half, parts
+        )
         last = commit - Int64(1)
-        source = window + (Int64(layer) * window_layer + Int64(request) * window_request) * 2
+        source = (
+            window + (Int64(layer) * window_layer + Int64(request) * window_request) * 2
+        )
         fits = Int64(request) < Int64(window_requests)
-        if (last >= 0) & (slot >= 0) & (slot < Int64(conv_slots)) & fits & (last < Int64(window_steps)):
-            self.copy_window(conv + (Int64(layer) * conv_layer + slot * conv_slot) * 2,
-                             source + last * window_step * 2, first, count, tid)
-        if (track_step >= 0) & (track >= 0) & (track < Int64(conv_slots)) & fits & (track_step < Int64(window_steps)):
-            self.copy_window(conv + (Int64(layer) * conv_layer + track * conv_slot) * 2,
-                             source + track_step * window_step * 2, first, count, tid)
+        if (
+            (last >= 0)
+            & (slot >= 0)
+            & (slot < Int64(conv_slots))
+            & fits
+            & (last < Int64(window_steps))
+        ):
+            self.copy_window(
+                conv + (Int64(layer) * conv_layer + slot * conv_slot) * 2,
+                source + last * window_step * 2,
+                first,
+                count,
+                tid,
+            )
+        if (
+            (track_step >= 0)
+            & (track >= 0)
+            & (track < Int64(conv_slots))
+            & fits
+            & (track_step < Int64(window_steps))
+        ):
+            self.copy_window(
+                conv + (Int64(layer) * conv_layer + track * conv_slot) * 2,
+                source + track_step * window_step * 2,
+                first,
+                count,
+                tid,
+            )
 
     @cute.jit
     def head_state(self, temporal, temporal_layer, layer, slot, head):
         """Byte address of temporal[layer, slot, head]."""
-        return temporal + (Int64(layer) * temporal_layer + (slot * self.heads + head) * self.dim * self.dim) * 4
+        return (
+            temporal
+            + (
+                Int64(layer) * temporal_layer
+                + (slot * self.heads + head) * self.dim * self.dim
+            )
+            * 4
+        )
 
     @cute.jit
-    def prefetch(self, args, kn, decay, values, betas, h, layer, head, half, slot, state, column0, warp, lane):
+    def prefetch(
+        self,
+        args,
+        kn,
+        decay,
+        values,
+        betas,
+        h,
+        layer,
+        head,
+        half,
+        slot,
+        state,
+        column0,
+        warp,
+        lane,
+    ):
         """Warp t: ring step t's normalized k, decay, v columns and beta into shared memory;
         every warp: its h columns into registers."""
         rawk, rawv, gk, beta = args[1:5]
@@ -184,31 +267,62 @@ class KdaCommit:
         K, R = self.dim, self.ring
         k_head = head // (self.heads // self.k_heads)
         row = (slot * self.heads + head) * R + warp
-        ring_k = rawk + (Int64(layer) * rawk_layer + ((slot * self.k_heads + k_head) * R + warp) * K) * 2
+        ring_k = (
+            rawk
+            + (
+                Int64(layer) * rawk_layer
+                + ((slot * self.k_heads + k_head) * R + warp) * K
+            )
+            * 2
+        )
         words = load_words(ring_k + Int64(lane) * 8, count=2, mutable=True)
         k = (bf16(words[0]), bf16(words[0], True), bf16(words[1]), bf16(words[1], True))
-        total = butterfly(pair_sum(mul_rn(k[0], k[0]), mul_rn(k[1], k[1]), mul_rn(k[2], k[2]), mul_rn(k[3], k[3])))
+        total = butterfly(
+            pair_sum(
+                mul_rn(k[0], k[0]),
+                mul_rn(k[1], k[1]),
+                mul_rn(k[2], k[2]),
+                mul_rn(k[3], k[3]),
+            )
+        )
         root = sqrt_approx_ftz(add_rn(total, Float32(EPS)))
         ring_g = gk + (Int64(layer) * gk_layer + row * K) * 4
-        g = load_words(ring_g + Int64(lane) * 16, count=4, result_type=Float32, word_type="f32", mutable=True)
+        g = load_words(
+            ring_g + Int64(lane) * 16,
+            count=4,
+            result_type=Float32,
+            word_type="f32",
+            mutable=True,
+        )
         for j in cutlass.range_constexpr(LANE_K):
             kn[warp, lane * LANE_K + j] = div_full(k[j], root)
             decay[warp, lane * LANE_K + j] = ex2_approx(mul_rn(g[j], Float32(LOG2E)))
-        ring_v = rawv + (Int64(layer) * rawv_layer + row * K + half * COLUMNS + 2 * lane) * 2
+        ring_v = (
+            rawv + (Int64(layer) * rawv_layer + row * K + half * COLUMNS + 2 * lane) * 2
+        )
         pair = load_words(ring_v, count=1, mutable=True)[0]
         values[warp, 2 * lane] = bf16(pair)
         values[warp, 2 * lane + 1] = bf16(pair, True)
         if lane == 0:
             ring_beta = beta + (Int64(layer) * beta_layer + row) * 4
-            betas[warp] = load_words(ring_beta, count=1, result_type=Float32, word_type="f32", mutable=True)[0]
+            betas[warp] = load_words(
+                ring_beta, count=1, result_type=Float32, word_type="f32", mutable=True
+            )[0]
         for c in cutlass.range_constexpr(WARP_COLUMNS):
-            got = load_words(state + (Int64(column0 + c) * K + lane * LANE_K) * 4, count=4,
-                             result_type=Float32, word_type="f32", mutable=True)
+            got = load_words(
+                state + (Int64(column0 + c) * K + lane * LANE_K) * 4,
+                count=4,
+                result_type=Float32,
+                word_type="f32",
+                mutable=True,
+            )
             for j in cutlass.range_constexpr(LANE_K):
                 h[c * LANE_K + j] = got[j]
 
     @cute.jit
-    def fold_step(self, h, kn, decay, values, betas, step: cutlass.Constexpr[int], warp, lane):
+    def fold_step(
+        self, h, kn, decay, values, betas, step: cutlass.Constexpr[int], warp, lane
+    ):
         """One recurrent step of kda_replayssm_exact_fold_kernel over the warp's columns."""
         n = tuple(kn[step, lane * LANE_K + j] for j in range(LANE_K))
         e = tuple(decay[step, lane * LANE_K + j] for j in range(LANE_K))
@@ -230,7 +344,9 @@ class KdaCommit:
     def copy_window(self, destination, source, first, count, tid):
         for i in cutlass.range(tid, count, WARPS * 32, unroll=1):
             offset = Int64(first + i) * 16
-            store_words(destination + offset, load_words(source + offset, count=4, mutable=True))
+            store_words(
+                destination + offset, load_words(source + offset, count=4, mutable=True)
+            )
 
 
 @cache
@@ -240,13 +356,31 @@ def compile_kda_commit(layers, heads, k_heads, dim, ring, conv_elems, track_inte
     vec32 = fake((cute.sym_int(),), (1,), torch.int32, 4)
     vec64 = fake((cute.sym_int(),), (1,), torch.int64, 8)
     i64, i32 = cutlass.Int64(0), cutlass.Int32(0)
-    args = (i64,) * 10 + (vec32, vec32, vec64, vec32) + (i64, i64, i64, i32) + (i64, i64, i64, i64, i32, i32)
+    args = (
+        (i64,) * 10
+        + (vec32, vec32, vec64, vec32)
+        + (i64, i64, i64, i32)
+        + (i64, i64, i64, i64, i32, i32)
+    )
     kernel = KdaCommit(layers, heads, k_heads, dim, ring, conv_elems, track_interval)
     return cute.compile(kernel, *args, make_fake_stream())
 
 
-def kda_commit(*, temporal, rawk, rawv, gk, beta, conv, window, slots, commit_lens, prefix_lens,
-               track_slots, track_interval):
+def kda_commit(
+    *,
+    temporal,
+    rawk,
+    rawv,
+    gk,
+    beta,
+    conv,
+    window,
+    slots,
+    commit_lens,
+    prefix_lens,
+    track_slots,
+    track_interval,
+):
     """Launch KdaCommit on the current stream. Tensors as the MambaPool holds them: temporal
     [layers, slots, HV, V, K] fp32, rawk [layers, slots, H, L, K] / rawv [layers, slots, HV, L, V]
     bf16, gk [layers, slots, HV, L, K] / beta [layers, slots, HV, L] fp32, conv [layers, slots,
@@ -254,23 +388,44 @@ def kda_commit(*, temporal, rawk, rawv, gk, beta, conv, window, slots, commit_le
     layers, _, heads, dim, _ = temporal.shape
     k_heads, ring = rawk.shape[2], rawk.shape[3]
     conv_elems = conv.shape[2] * conv.shape[3]
-    layouts = (all(t[0].is_contiguous() for t in (temporal, rawk, rawv, gk, beta, conv))
-               and window[0, 0].is_contiguous() and temporal.shape[4] == dim and ring >= STEPS
-               and window.shape[3:] == conv.shape[2:] and window.shape[2] <= STEPS)
-    dtypes = (rawk.dtype == rawv.dtype == conv.dtype == window.dtype == torch.bfloat16
-              and temporal.dtype == gk.dtype == beta.dtype == torch.float32
-              and slots.dtype == commit_lens.dtype == track_slots.dtype == torch.int32
-              and prefix_lens.dtype == torch.int64)
+    layouts = (
+        all(t[0].is_contiguous() for t in (temporal, rawk, rawv, gk, beta, conv))
+        and window[0, 0].is_contiguous()
+        and temporal.shape[4] == dim
+        and ring >= STEPS
+        and window.shape[3:] == conv.shape[2:]
+        and window.shape[2] <= STEPS
+    )
+    dtypes = (
+        rawk.dtype == rawv.dtype == conv.dtype == window.dtype == torch.bfloat16
+        and temporal.dtype == gk.dtype == beta.dtype == torch.float32
+        and slots.dtype == commit_lens.dtype == track_slots.dtype == torch.int32
+        and prefix_lens.dtype == torch.int64
+    )
     if not (layouts and dtypes):
-        raise ValueError("KdaCommit needs the MambaPool's per-slot layouts and int32 / int64 indices")
-    code = compile_kda_commit(layers, heads, k_heads, dim, ring, conv_elems, track_interval)
+        raise ValueError(
+            "KdaCommit needs the MambaPool's per-slot layouts and int32 / int64 indices"
+        )
+    code = compile_kda_commit(
+        layers, heads, k_heads, dim, ring, conv_elems, track_interval
+    )
     address = lambda t: cutlass.Int64(t.data_ptr())
     stride = lambda t, i=0: cutlass.Int64(t.stride(i))
     args = tuple(address(t) for t in (temporal, rawk, rawv, gk, beta))
     args += tuple(stride(t) for t in (temporal, rawk, rawv, gk, beta))
-    args += (dynamic_view(slots, 4), dynamic_view(commit_lens, 4), dynamic_view(prefix_lens, 8),
-             dynamic_view(track_slots, 4))
+    args += (
+        dynamic_view(slots, 4),
+        dynamic_view(commit_lens, 4),
+        dynamic_view(prefix_lens, 8),
+        dynamic_view(track_slots, 4),
+    )
     args += (address(conv), stride(conv), stride(conv, 1), cutlass.Int32(conv.shape[1]))
-    args += (address(window), stride(window), stride(window, 1), stride(window, 2),
-             cutlass.Int32(window.shape[1]), cutlass.Int32(window.shape[2]))
+    args += (
+        address(window),
+        stride(window),
+        stride(window, 1),
+        stride(window, 2),
+        cutlass.Int32(window.shape[1]),
+        cutlass.Int32(window.shape[2]),
+    )
     code(*args, stream(temporal.device))

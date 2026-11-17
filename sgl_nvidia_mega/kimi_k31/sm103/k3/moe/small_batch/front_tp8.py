@@ -11,10 +11,10 @@ from ...common.mailbox import rearm_fence
 from ...common.primitives import (
     alloc,
     bits_float,
-    float_bits,
     copy_bulk,
     copy_g2s,
     early_weights,
+    float_bits,
     fma,
     gate_bf16_bits,
     init_barriers,
@@ -39,11 +39,12 @@ from ...common.primitives import (
     warp_sum,
     zeros,
 )
-from ..shared import situ
-from ..routing import Top16Fast, gather_x, score_record, stage_rows
+from ..routing import Top16Fast, gather_x
 from ..routing import router_add as routing_add
 from ..routing import router_sigmoid as routing_sigmoid
 from ..routing import router_weight as routing_weight
+from ..routing import score_record, stage_rows
+from ..shared import situ
 
 
 class MoeSharedTP8:
@@ -130,8 +131,16 @@ class MoeSharedTP8:
                 up = mailbox_load(hg.iterator + par * 2 * 1536 + 768 + column, count=2)
                 valid = published(gate) & published(up)
             beta, linear_beta = params[0], params[1]
-            hsm[column] = Float32(BFloat16(situ(bits_float(gate[0]), bits_float(up[0]), beta, linear_beta)))
-            hsm[column + 1] = Float32(BFloat16(situ(bits_float(gate[1]), bits_float(up[1]), beta, linear_beta)))
+            hsm[column] = Float32(
+                BFloat16(
+                    situ(bits_float(gate[0]), bits_float(up[0]), beta, linear_beta)
+                )
+            )
+            hsm[column + 1] = Float32(
+                BFloat16(
+                    situ(bits_float(gate[1]), bits_float(up[1]), beta, linear_beta)
+                )
+            )
         cute.arch.sync_threads()
         out = (hsm, output, par3, lane)
         if lsu_count > 0:
@@ -254,7 +263,9 @@ class MoeFrontTP8:
             if cta > 0:
                 for i in range(tid - 1, 2 * gu_rows, 511):
                     token, row = i // gu_rows, i % gu_rows
-                    hg[(par ^ 1) * 2 * 1536 + token * 1536 + gu_start + row] = Uint32(0x80000000)
+                    hg[(par ^ 1) * 2 * 1536 + token * 1536 + gu_start + row] = Uint32(
+                        0x80000000
+                    )
             slot_vectors: cutlass.Constexpr = xmoe.shape[1] * xmoe.shape[2] * 896
             for i in range(cta * 511 + tid - 1, slot_vectors, self.grid * 511):
                 pointer = xmoe.iterator + (par ^ 1) * slot_vectors * 8 + i * 8
@@ -284,11 +295,14 @@ class MoeFrontTP8:
                 for w in cutlass.range_constexpr(16):
                     lo += latent_partial[w, 2 * lane]
                     hi += latent_partial[w, 2 * lane + 1]
-                words = tuple(Uint32(float_bits(v if v != 0 else Float32(0))) for v in (lo, hi))
+                words = tuple(
+                    Uint32(float_bits(v if v != 0 else Float32(0))) for v in (lo, hi)
+                )
                 offset = par * 8 * 3584 * 4 + rank * 1792 + (first_pair + lane) * 8
                 for i in cutlass.range_constexpr(2):
-                    multicast_words(multicast_base + Uint64(offset + 4 * i),
-                                    (words[i],), kind="b32")
+                    multicast_words(
+                        multicast_base + Uint64(offset + 4 * i), (words[i],), kind="b32"
+                    )
         else:
             named_barrier(3, 512, arrive=True)
         if tid == 0:  # noqa: SIM102
@@ -321,7 +335,11 @@ class MoeFrontTP8:
                         store_gate_mailbox(pointer, gate_bf16_bits(value))
                     cute.arch.sync_warp()
                 for vector in range(tid, 448, 256):
-                    pointer = cute.recast_ptr(latent.iterator, dtype=Float32) + par * 8 * 3584 + vector * 8
+                    pointer = (
+                        cute.recast_ptr(latent.iterator, dtype=Float32)
+                        + par * 8 * 3584
+                        + vector * 8
+                    )
                     words = mailbox_load(pointer, count=4, scope="sys")
                     ready = published(words)
                     started, polls = Int64(0), Int32(0)

@@ -21,7 +21,11 @@ try:
         PreparationView,
     )
 except ModuleNotFoundError:  # SGLang before sgl-project/sglang#45389
-    from sglang.srt.megakernels.binding import HybridPoolView, HybridStepView, PreparationView
+    from sglang.srt.megakernels.binding import (
+        HybridPoolView,
+        HybridStepView,
+        PreparationView,
+    )
     from sglang.srt.megakernels.spec import (
         BuildContext,
         BuiltMegakernel,

@@ -13,8 +13,7 @@ import cutlass.cute as cute
 import torch
 from cutlass.cute.runtime import make_fake_stream
 
-from ..k3.common.host import fake, layout, prepare_shared_carveout, stream
-from ..k3.common.host import to_cute
+from ..k3.common.host import fake, layout, prepare_shared_carveout, stream, to_cute
 from ..k3.gemm.projection import PreparedProjection
 from .mla import DraftMlaQuery, DraftMlaValue
 
@@ -64,20 +63,32 @@ class DraftAttention:
     def __init__(self, w, shapes, tactic, device, *, q_scale=1.0, k_scale=1.0):
         heads, self.shapes, self.device = shapes.heads, shapes, device
         bf16 = lambda t: t.detach().to(torch.bfloat16).contiguous()
-        self.q_norm, self.kv_norm, self.q_b = bf16(w.q_a_norm), bf16(w.kv_a_norm), bf16(w.q_b)
+        self.q_norm, self.kv_norm, self.q_b = (
+            bf16(w.q_a_norm),
+            bf16(w.kv_a_norm),
+            bf16(w.q_b),
+        )
         if self.q_b.shape != (heads * 192, 1536):
             raise ValueError(f"q_b {tuple(self.q_b.shape)}")
         kv_b = bf16(w.kv_b).view(heads, 256, 512)
         self.w_uk = kv_b[:, :128].contiguous()  # [heads, nope 128, latent 512]
-        self.w_uv = kv_b[:, 128:].contiguous().transpose(1, 2)  # [heads, 512, v], latent-contiguous
-        self.fused_a = PreparedProjection(bf16(w.fused_a), {shapes.tokens: tactic}).prepare()
+        self.w_uv = (
+            kv_b[:, 128:].contiguous().transpose(1, 2)
+        )  # [heads, 512, v], latent-contiguous
+        self.fused_a = PreparedProjection(
+            bf16(w.fused_a), {shapes.tokens: tactic}
+        ).prepare()
         f32 = dict(dtype=torch.float32, device=device)
         self.q_scale_inv = torch.tensor([1.0 / q_scale], **f32)
         self.k_scale_inv = torch.tensor([1.0 / k_scale], **f32)
         tokens = shapes.tokens
-        self.projected = torch.empty(tokens, PROJECTED, dtype=torch.bfloat16, device=device)
+        self.projected = torch.empty(
+            tokens, PROJECTED, dtype=torch.bfloat16, device=device
+        )
         self.query = torch.empty(tokens, heads, 576, dtype=torch.uint8, device=device)
-        self.latent = torch.empty(tokens, heads, 512, dtype=torch.bfloat16, device=device)
+        self.latent = torch.empty(
+            tokens, heads, 512, dtype=torch.bfloat16, device=device
+        )
         self.lengths = torch.ones(shapes.requests, dtype=torch.int32, device=device)
         self.value = compile_value(tokens, heads, layout(self.w_uv), shapes.rows)
         self.views = tuple(
@@ -94,7 +105,9 @@ class DraftAttention:
         specs = tuple(layout(t) for t in tensors)
         if specs not in self.codes:
             index = self.device.index if self.device.index is not None else 0
-            self.codes[specs] = compile_query(self.shapes.tokens, self.shapes.heads, specs, index)
+            self.codes[specs] = compile_query(
+                self.shapes.tokens, self.shapes.heads, specs, index
+            )
         return self.codes[specs]
 
     def run(self, x, positions, cos_sin, cache, slots, core, out, mark=None):

@@ -65,13 +65,21 @@ from ..k3.common.primitives import (
 )
 from .accept import BLOCK, _canon
 
-GAMMA, TOPK = BLOCK - 1, 16  # the defaults (block 8, selector K 16); each build passes its own block / topk
-BLOCKS, TOPKS = (5, 8), (16, 32)  # block 5 = Q5 (1 anchor + 4 drafts), block 8 = Q8; selector K 16 / 32
+GAMMA, TOPK = (
+    BLOCK - 1,
+    16,
+)  # the defaults (block 8, selector K 16); each build passes its own block / topk
+BLOCKS, TOPKS = (
+    (5, 8),
+    (16, 32),
+)  # block 5 = Q5 (1 anchor + 4 drafts), block 8 = Q8; selector K 16 / 32
 SHARD_DTYPES = {"f32": torch.float32, "bf16": torch.bfloat16}
 SLICE, STATS_THREADS, DECIDE_THREADS = 1024, 128, 256
 STATS_WARPS = STATS_THREADS // 32
 REC = 24  # m, sum, gumbel key, gumbel id, max, argmax id, round lo16, round hi15, z at the 16 S ids (8 + topk)
-ROUND_MASK = 0x7FFFFFFF  # rounds are 31-bit: the all-ones epoch of a fresh box is never a round
+ROUND_MASK = (
+    0x7FFFFFFF  # rounds are 31-bit: the all-ones epoch of a fresh box is never a round
+)
 NEG_INF, NO_ID = float("-inf"), 0x7FFFFFFF
 PHILOX_M = (0xD2511F53, 0xCD9E8D57)
 PHILOX_W = (0x9E3779B9, 0xBB67AE85)
@@ -80,7 +88,11 @@ GUMBEL_STREAM, COIN_STREAM = 0x6A09E667, 0x3C6EF372
 
 @asm((Uint32, Uint32), pure=True)
 def mulhilo(a, b):
-    return "mul.hi.u32 $0,$2,$3; mul.lo.u32 $1,$2,$3;", "=r,=r,r,r", (Uint32(a), Uint32(b))
+    return (
+        "mul.hi.u32 $0,$2,$3; mul.lo.u32 $1,$2,$3;",
+        "=r,=r,r,r",
+        (Uint32(a), Uint32(b)),
+    )
 
 
 @asm()
@@ -90,7 +102,11 @@ def shared_or(pointer, value):
 
 @asm(Uint32)
 def atomic_add(pointer, value):
-    return "atom.relaxed.gpu.global.add.u32 $0,[$1],$2;", "=r,l,r,~{memory}", (pointer, Uint32(value))
+    return (
+        "atom.relaxed.gpu.global.add.u32 $0,[$1],$2;",
+        "=r,l,r,~{memory}",
+        (pointer, Uint32(value)),
+    )
 
 
 @asm()
@@ -111,8 +127,10 @@ def store_element(pointer, datum, epoch):
 def load_elements(pointer):
     """Two box elements as (datum0, epoch0, datum1, epoch1): one volatile v2.b64 load, each element single-copy
     atomic (a v4.b32 load could pair a datum with another round's epoch)."""
-    code = ("{ .reg .b64 a, b; ld.volatile.global.v2.b64 {a, b}, [$4]; mov.b64 {$0, $1}, a; "
-            "mov.b64 {$2, $3}, b; }")
+    code = (
+        "{ .reg .b64 a, b; ld.volatile.global.v2.b64 {a, b}, [$4]; mov.b64 {$0, $1}, a; "
+        "mov.b64 {$2, $3}, b; }"
+    )
     return code, "=r,=r,=r,=r,l,~{memory}", (pointer,)
 
 
@@ -129,7 +147,9 @@ def fetch_elements(values, i: cutlass.Constexpr[int], pointer, epoch):
 
 
 @cute.jit
-def poll_round(base, count: cutlass.Constexpr[int], epoch, deadline_ns: cutlass.Constexpr[int]):
+def poll_round(
+    base, count: cutlass.Constexpr[int], epoch, deadline_ns: cutlass.Constexpr[int]
+):
     """The data of the 2 ``count`` box elements at ``base`` once every one carries ``epoch`` ([count, 2] words).
     All loads issue before any check and only stale pairs re-poll (as mailbox.poll); a missed deadline
     fail-stops. Nothing is re-armed: the next same-parity round's writes carry a newer epoch."""
@@ -181,12 +201,25 @@ def pick(words, index):
 def gumbel(word):
     """G = -log E, E = -log(1 - v) ~ Exp(1) for v = (word + 1/2) / 2^32: the series near 0 keeps E's
     relative precision where the row maxima live (small E = large G)."""
-    v = (Float32(Int32(word >> Uint32(16))) * Float32(65536.0) + Float32(Int32(word & Uint32(0xFFFF)))
-         + Float32(0.5)) * Float32(2.0**-32)
+    v = (
+        Float32(Int32(word >> Uint32(16))) * Float32(65536.0)
+        + Float32(Int32(word & Uint32(0xFFFF)))
+        + Float32(0.5)
+    ) * Float32(2.0**-32)
     if v > Float32(1.0 - 2.0**-24):
         v = Float32(1.0 - 2.0**-24)
-    e = v * (Float32(1.0) + v * (Float32(1 / 2) + v * (Float32(1 / 3) + v * (Float32(1 / 4) + v * (
-        Float32(1 / 5) + v * Float32(1 / 6))))))
+    e = v * (
+        Float32(1.0)
+        + v
+        * (
+            Float32(1 / 2)
+            + v
+            * (
+                Float32(1 / 3)
+                + v * (Float32(1 / 4) + v * (Float32(1 / 5) + v * Float32(1 / 6)))
+            )
+        )
+    )
     if v >= Float32(2.0**-6):
         e = -cute.math.log(Float32(1.0) - v, fastmath=False)
     return -cute.math.log(e, fastmath=True)
@@ -236,7 +269,9 @@ def takes(v_new, i_new, v_best, i_best):
 def check_shape(block, topk):
     """(block, gamma, topk, rec) of a build: block 5 or 8 rows per request, selector K 16 or 32."""
     if block not in BLOCKS or topk not in TOPKS:
-        raise ValueError(f"sampled accept serves block {BLOCKS} x selector K {TOPKS}, got block {block} K {topk}")
+        raise ValueError(
+            f"sampled accept serves block {BLOCKS} x selector K {TOPKS}, got block {block} K {topk}"
+        )
     return block, block - 1, topk, 8 + topk
 
 
@@ -248,15 +283,30 @@ class SampledStats:
     [TP, rows, 8 + K] u64 elements (this GPU's view of the call's parity box); then mc, rank, col_offset (this
     shard's first vocab id), valid (its real columns), R. block / K: the build's (8 / 16 by default; 5 / 32)."""
 
-    def __init__(self, tp, width, softcap, rows, *, dtype="f32", local=False, block=BLOCK, topk=TOPK):
+    def __init__(
+        self,
+        tp,
+        width,
+        softcap,
+        rows,
+        *,
+        dtype="f32",
+        local=False,
+        block=BLOCK,
+        topk=TOPK,
+    ):
         self.block, self.gamma, self.topk, self.rec = check_shape(block, topk)
         if width % SLICE or dtype not in SHARD_DTYPES:
-            raise ValueError(f"SampledStats needs a shard width divisible by {SLICE} and FP32 / BF16, got "
-                             f"{width} {dtype}")
+            raise ValueError(
+                f"SampledStats needs a shard width divisible by {SLICE} and FP32 / BF16, got "
+                f"{width} {dtype}"
+            )
         self.tp, self.width, self.split, self.local = tp, width, width // SLICE, local
         self.rows, self.bf16_shard = rows, dtype == "bf16"
         self.softcap = None if softcap is None else float(np.float32(softcap))
-        self.inverse_softcap = None if softcap is None else float(np.float32(1) / np.float32(softcap))
+        self.inverse_softcap = (
+            None if softcap is None else float(np.float32(1) / np.float32(softcap))
+        )
 
     @cute.jit
     def __call__(self, *args):
@@ -265,22 +315,53 @@ class SampledStats:
     @cute.jit
     def logit(self, x):
         if cutlass.const_expr(self.softcap is not None):
-            x = cute.math.tanh(x * Float32(self.inverse_softcap), fastmath=False) * Float32(self.softcap)
+            x = cute.math.tanh(
+                x * Float32(self.inverse_softcap), fastmath=False
+            ) * Float32(self.softcap)
         return x
 
     @cute.kernel
     def kernel(self, args):
-        logits_a, temperatures_a, ids_a, ctr_a, scratch_a, count_a, box_a, mc, rank, col_offset, valid, rows = args
+        (
+            logits_a,
+            temperatures_a,
+            ids_a,
+            ctr_a,
+            scratch_a,
+            count_a,
+            box_a,
+            mc,
+            rank,
+            col_offset,
+            valid,
+            rows,
+        ) = args
         block, gamma, topk, rec_words = self.block, self.gamma, self.topk, self.rec
         requests = rows // block
         element = cutlass.BFloat16 if self.bf16_shard else Float32
-        logits = gtensor(element, logits_a, (rows, self.width), (self.width, 1), 8 if self.bf16_shard else 16)
+        logits = gtensor(
+            element,
+            logits_a,
+            (rows, self.width),
+            (self.width, 1),
+            8 if self.bf16_shard else 16,
+        )
         temperatures = gtensor(Float32, temperatures_a, requests, 1, 4)
-        candidate_ids = gtensor(Int64, ids_a, (requests, gamma, topk), (gamma * topk, topk, 1), 8)
+        candidate_ids = gtensor(
+            Int64, ids_a, (requests, gamma, topk), (gamma * topk, topk, 1), 8
+        )
         ctr = gtensor(Int64, ctr_a, 3, 1, 8)
-        scratch = gtensor(Float32, scratch_a, (self.rows, self.split, 8), (self.split * 8, 8, 1), 16)
+        scratch = gtensor(
+            Float32, scratch_a, (self.rows, self.split, 8), (self.split * 8, 8, 1), 16
+        )
         count = gtensor(Int32, count_a, self.rows, 1, 4)
-        box = gtensor(Int64, box_a, (self.tp, self.rows, rec_words), (self.rows * rec_words, rec_words, 1), 16)
+        box = gtensor(
+            Int64,
+            box_a,
+            (self.tp, self.rows, rec_words),
+            (self.rows * rec_words, rec_words, 1),
+            16,
+        )
         row, piece, _ = cute.arch.block_idx()
         tid, _, _ = cute.arch.thread_idx()
         lane, warp = tid % 32, tid // 32
@@ -297,16 +378,24 @@ class SampledStats:
         if tid < SLICE // 32:
             bitmap[tid] = Uint32(0)
         cute.arch.sync_threads()
-        if (pos < gamma) & (tid < topk):  # S ids in this slice: excluded from the out-of-S Gumbel-max
+        if (pos < gamma) & (
+            tid < topk
+        ):  # S ids in this slice: excluded from the out-of-S Gumbel-max
             local_id = Int32(candidate_ids[req, pos, tid]) - col_offset - base
             if (local_id >= 0) & (local_id < SLICE) & (local_id + base < valid):
-                shared_or(bitmap.iterator + (local_id >> 5), Uint32(1) << Uint32(local_id & 31))
+                shared_or(
+                    bitmap.iterator + (local_id >> 5),
+                    Uint32(1) << Uint32(local_id & 31),
+                )
         cute.arch.sync_threads()
         rd, seed = ctr[0], ctr[1]
         round_word = Uint32(rd & Int64(ROUND_MASK))
         if (row == 0) & (piece == 0) & (tid == 0):
             ctr[2] = rd  # for SampledDecide, which reads it after this grid completes
-        k0, k1 = Uint32(seed & Int64(0xFFFFFFFF)), Uint32((seed >> Int64(32)) & Int64(0xFFFFFFFF))
+        k0, k1 = (
+            Uint32(seed & Int64(0xFFFFFFFF)),
+            Uint32((seed >> Int64(32)) & Int64(0xFFFFFFFF)),
+        )
         inv_t = div_rn(Float32(1.0), Float32(temperatures[req]))
         m, total = Float32(NEG_INF), Float32(0.0)
         best_l, best_li = Float32(NEG_INF), Int32(NO_ID)
@@ -314,14 +403,23 @@ class SampledStats:
         for i in cutlass.range_constexpr(SLICE // (4 * STATS_THREADS)):
             j = base + 4 * (tid + STATS_THREADS * i)
             xs = load_four(logits, row, j, self.bf16_shard)
-            noise = philox(Uint32((col_offset + j) >> 2), Uint32(row), round_word, Uint32(GUMBEL_STREAM), k0, k1)
+            noise = philox(
+                Uint32((col_offset + j) >> 2),
+                Uint32(row),
+                round_word,
+                Uint32(GUMBEL_STREAM),
+                k0,
+                k1,
+            )
             bits = bitmap[(j - base) >> 5] >> Uint32((j - base) & 31)
             for k in cutlass.range_constexpr(4):
                 if j + k < valid:
                     l = self.logit(xs[k])
                     z = l * inv_t
                     m_new = cute.arch.fmax(m, z)
-                    total = total * cute.math.exp(m - m_new, fastmath=True) + cute.math.exp(z - m_new, fastmath=True)
+                    total = total * cute.math.exp(
+                        m - m_new, fastmath=True
+                    ) + cute.math.exp(z - m_new, fastmath=True)
                     m = m_new
                     if l > best_l:
                         best_l = l
@@ -364,7 +462,10 @@ class SampledStats:
                 if takes(part_v[w, 3], part_i[w, 1], best_g, best_gi):
                     best_g = part_v[w, 3]
                     best_gi = part_i[w, 1]
-            store_words(at(scratch, row, piece, 0), tuple(Uint32(float_bits(x)) for x in (m, total, best_l, best_g)))
+            store_words(
+                at(scratch, row, piece, 0),
+                tuple(Uint32(float_bits(x)) for x in (m, total, best_l, best_g)),
+            )
             store_words(at(scratch, row, piece, 4), (Uint32(best_li), Uint32(best_gi)))
             cute.arch.fence_acq_rel_gpu()
             is_last = Int32(0)
@@ -402,7 +503,9 @@ class SampledStats:
                 rec[5] = _canon(Float32(best_li))
                 rec[6] = _canon(Float32(Int32(round_word & Uint32(0xFFFF))))
                 rec[7] = _canon(Float32(Int32(round_word >> Uint32(16))))
-            if tid < topk:  # z at the S ids this shard owns (0.0 elsewhere and on the bonus row)
+            if (
+                tid < topk
+            ):  # z at the S ids this shard owns (0.0 elsewhere and on the bonus row)
                 value = Float32(0.0)
                 if pos < gamma:
                     owned = Int32(candidate_ids[req, pos, tid]) - col_offset
@@ -410,7 +513,9 @@ class SampledStats:
                         value = self.logit(Float32(logits[row, owned])) * inv_t
                 rec[8 + tid] = _canon(value)
             cute.arch.sync_threads()
-            if tid < rec_words:  # one (datum, epoch) element per thread (rec_words <= 40 < STATS_THREADS)
+            if (
+                tid < rec_words
+            ):  # one (datum, epoch) element per thread (rec_words <= 40 < STATS_THREADS)
                 if cutlass.const_expr(self.local):
                     store_element(at(box, rank, row, tid), rec[tid], round_word)
                 else:
@@ -429,12 +534,32 @@ class SampledDecide:
     block / K: the build's (8 / 16 by default; 5 / 32). At K = 32 the S candidates fill the warp: the out-of-S
     group's key joins after the butterfly (one compare, the same order)."""
 
-    def __init__(self, tp, width, rows, *, local=False, deadline_ns=0, debug=False, block=BLOCK, topk=TOPK):
+    def __init__(
+        self,
+        tp,
+        width,
+        rows,
+        *,
+        local=False,
+        deadline_ns=0,
+        debug=False,
+        block=BLOCK,
+        topk=TOPK,
+    ):
         self.block, self.gamma, self.topk, self.rec = check_shape(block, topk)
-        self.threads = 32 * block  # warp w: row w of the request (no idle warps: block 5 -> 160 threads)
+        self.threads = (
+            32 * block
+        )  # warp w: row w of the request (no idle warps: block 5 -> 160 threads)
         if tp > 32 - 1:
-            raise ValueError(f"SampledDecide merges at most 31 ranks in a warp, got tp={tp}")
-        self.tp, self.width, self.local, self.deadline_ns = tp, width, local, deadline_ns
+            raise ValueError(
+                f"SampledDecide merges at most 31 ranks in a warp, got tp={tp}"
+            )
+        self.tp, self.width, self.local, self.deadline_ns = (
+            tp,
+            width,
+            local,
+            deadline_ns,
+        )
         self.debug, self.rows = debug, rows
 
     @cute.jit
@@ -446,18 +571,38 @@ class SampledDecide:
         box_a, bbox_a, bmc, rank, ctr_a, candidates_a, ids_a, q_a = args[0:8]
         accept_a, bonus_a, target_a, err_a, requests = args[8:13]
         block, gamma, topk, rec_words = self.block, self.gamma, self.topk, self.rec
-        box = gtensor(Int64, box_a, (self.tp, self.rows, rec_words), (self.rows * rec_words, rec_words, 1), 16)
+        box = gtensor(
+            Int64,
+            box_a,
+            (self.tp, self.rows, rec_words),
+            (self.rows * rec_words, rec_words, 1),
+            16,
+        )
         bbox = gtensor(Int64, bbox_a, (self.rows, 2), (2, 1), 16)
         ctr = gtensor(Int64, ctr_a, 3, 1, 8)
         candidates = gtensor(Int64, candidates_a, (requests, block), (block, 1), 8)
-        candidate_ids = gtensor(Int64, ids_a, (requests, gamma, topk), (gamma * topk, topk, 1), 8)
-        q_rows = gtensor(Float32, q_a, (requests, gamma, topk), (gamma * topk, topk, 1), 4)
+        candidate_ids = gtensor(
+            Int64, ids_a, (requests, gamma, topk), (gamma * topk, topk, 1), 8
+        )
+        q_rows = gtensor(
+            Float32, q_a, (requests, gamma, topk), (gamma * topk, topk, 1), 4
+        )
         accept_len = gtensor(Int32, accept_a, requests, 1, 4)
         bonus = gtensor(Int64, bonus_a, requests, 1, 8)
         target = gtensor(Int64, target_a, (requests, block), (block, 1), 8)
         err = gtensor(Int32, err_a, 1, 1, 4)
         width = 8 + self.tp * rec_words
-        dbg = gtensor(Float32, args[13], (requests, block, width), (block * width, width, 1), 4) if self.debug else None
+        dbg = (
+            gtensor(
+                Float32,
+                args[13],
+                (requests, block, width),
+                (block * width, width, 1),
+                4,
+            )
+            if self.debug
+            else None
+        )
         req, _, _ = cute.arch.block_idx()
         tid, _, _ = cute.arch.thread_idx()
         lane, w = tid % 32, tid // 32
@@ -467,22 +612,39 @@ class SampledDecide:
         tokens = alloc(smem, Int32, block)
         cute.arch.griddepcontrol_wait()  # the stats grid has completed: every read of the round is done
         cute.arch.griddepcontrol_launch_dependents()
-        round_word = Uint32(ctr[2] & Int64(ROUND_MASK))  # this call's round (the epoch every element must carry)
+        round_word = Uint32(
+            ctr[2] & Int64(ROUND_MASK)
+        )  # this call's round (the epoch every element must carry)
         if (req == 0) & (tid == 0):
             ctr[0] = ctr[0] + Int64(1)
-        if tid < block * self.tp:  # poll rank s's record of row r for this round (block * tp <= 32 * block threads)
+        if (
+            tid < block * self.tp
+        ):  # poll rank s's record of row r for this round (block * tp <= 32 * block threads)
             r, s = tid // self.tp, tid % self.tp
-            got = poll_round(at(box, s, req * block + r, 0), rec_words // 2, round_word, self.deadline_ns)
+            got = poll_round(
+                at(box, s, req * block + r, 0),
+                rec_words // 2,
+                round_word,
+                self.deadline_ns,
+            )
             for i in cutlass.range_constexpr(rec_words // 2):
                 for k in cutlass.range_constexpr(2):
                     recs[r, s, 2 * i + k] = bits_float(got[i, k])
         cute.arch.sync_threads()
         if cutlass.const_expr(self.debug):
             for i in range(tid, block * self.tp * rec_words, self.threads):
-                dbg[req, i // (self.tp * rec_words), 8 + i % (self.tp * rec_words)] = recs[
-                    i // (self.tp * rec_words), (i // rec_words) % self.tp, i % rec_words]
+                dbg[req, i // (self.tp * rec_words), 8 + i % (self.tp * rec_words)] = (
+                    recs[
+                        i // (self.tp * rec_words),
+                        (i // rec_words) % self.tp,
+                        i % rec_words,
+                    ]
+                )
         seed = ctr[1]
-        k0, k1 = Uint32(seed & Int64(0xFFFFFFFF)), Uint32((seed >> Int64(32)) & Int64(0xFFFFFFFF))
+        k0, k1 = (
+            Uint32(seed & Int64(0xFFFFFFFF)),
+            Uint32((seed >> Int64(32)) & Int64(0xFFFFFFFF)),
+        )
         m, total = Float32(NEG_INF), Float32(0.0)
         best_l, best_li = Float32(NEG_INF), Int32(NO_ID)
         best_g, best_gi = Float32(NEG_INF), Int32(NO_ID)
@@ -495,7 +657,9 @@ class SampledDecide:
             best_li = Int32(recs[w, lane, 5])
             lo = Float32(Int32(round_word & Uint32(0xFFFF)))
             hi = Float32(Int32(round_word >> Uint32(16)))
-            if (recs[w, lane, 6] != lo) | (recs[w, lane, 7] != hi):  # a cross-check: the epochs already matched
+            if (recs[w, lane, 6] != lo) | (
+                recs[w, lane, 7] != hi
+            ):  # a cross-check: the epochs already matched
                 err[0] = Int32(1)
         for d in cutlass.range_constexpr(5):
             om = cute.arch.shuffle_sync_bfly(m, 1 << d)
@@ -548,8 +712,16 @@ class SampledDecide:
                 hit_f = Float32(1.0)
             p_draft = warp_sum(p_draft)
             q_draft = warp_sum(q_draft)
-            coin = uniform(philox(Uint32(w), Uint32(req), round_word, Uint32(COIN_STREAM), k0, k1)[0])
-            if (q_draft > Float32(0.0)) & (q_draft <= Float32(1.0)) & (coin * q_draft < p_draft):
+            coin = uniform(
+                philox(Uint32(w), Uint32(req), round_word, Uint32(COIN_STREAM), k0, k1)[
+                    0
+                ]
+            )
+            if (
+                (q_draft > Float32(0.0))
+                & (q_draft <= Float32(1.0))
+                & (coin * q_draft < p_draft)
+            ):
                 accept = Int32(1)
             if cutlass.const_expr(self.debug):
                 hits = warp_sum(hit_f)
@@ -558,11 +730,20 @@ class SampledDecide:
                     dbg[req, w, 2] = q_draft
                     dbg[req, w, 3] = coin
                     dbg[req, w, 7] = hits
-            key = Float32(NEG_INF)  # the residual max(p - q, 0): S keys + the out-of-S group
+            key = Float32(
+                NEG_INF
+            )  # the residual max(p - q, 0): S keys + the out-of-S group
             choice = Int32(NO_ID)
             residual = p - q_sum
             if (lane < topk) & (first != 0) & (residual > Float32(0.0)):
-                noise = philox(Uint32(gid >> 2), Uint32(req * block + w), round_word, Uint32(GUMBEL_STREAM), k0, k1)
+                noise = philox(
+                    Uint32(gid >> 2),
+                    Uint32(req * block + w),
+                    round_word,
+                    Uint32(GUMBEL_STREAM),
+                    k0,
+                    k1,
+                )
                 key = cute.math.log(residual, fastmath=False) + gumbel(pick(noise, gid))
                 choice = gid
             for d in cutlass.range_constexpr(5):
@@ -598,46 +779,101 @@ class SampledDecide:
                 accept_len[req] = n
                 bonus[req] = Int64(chosen)
             else:
-                if rank == Int32(0):  # rank 0's decision on every rank (as Rank0Broadcast): (n, e), (token, e)
+                if (
+                    rank == Int32(0)
+                ):  # rank 0's decision on every rank (as Rank0Broadcast): (n, e), (token, e)
                     offset = cute.crd2idx((req, 0), bbox.layout)
                     multicast_element(bmc + Int64(offset) * 8, Uint32(n), round_word)
-                    multicast_element(bmc + (Int64(offset) + Int64(1)) * 8, Uint32(chosen), round_word)
+                    multicast_element(
+                        bmc + (Int64(offset) + Int64(1)) * 8, Uint32(chosen), round_word
+                    )
                 got = poll_round(at(bbox, req, 0), 1, round_word, self.deadline_ns)
                 accept_len[req] = Int32(got[0, 0])
                 bonus[req] = Int64(got[0, 1])  # a token id: below 2^31
 
 
 @cache
-def compile_sampled_stats(tp, width, softcap, rows, local, dtype="f32", block=BLOCK, topk=TOPK):
+def compile_sampled_stats(
+    tp, width, softcap, rows, local, dtype="f32", block=BLOCK, topk=TOPK
+):
     address, value = cutlass.Int64(0), cutlass.Int32(0)
     args = (address,) * 8 + (value,) * 4
-    return cute.compile(SampledStats(tp, width, softcap, rows, dtype=dtype, local=local, block=block, topk=topk), *args,
-                        make_fake_stream())
+    return cute.compile(
+        SampledStats(
+            tp, width, softcap, rows, dtype=dtype, local=local, block=block, topk=topk
+        ),
+        *args,
+        make_fake_stream(),
+    )
 
 
 @cache
-def compile_sampled_decide(tp, width, rows, local, deadline_ns, debug=False, block=BLOCK, topk=TOPK):
+def compile_sampled_decide(
+    tp, width, rows, local, deadline_ns, debug=False, block=BLOCK, topk=TOPK
+):
     address, value = cutlass.Int64(0), cutlass.Int32(0)
-    args = (address, address, address, value) + (address,) * 8 + (value,) + ((address,) if debug else ())
-    return cute.compile(SampledDecide(tp, width, rows, local=local, deadline_ns=deadline_ns, debug=debug, block=block,
-                                      topk=topk), *args, make_fake_stream())
+    args = (
+        (address, address, address, value)
+        + (address,) * 8
+        + (value,)
+        + ((address,) if debug else ())
+    )
+    return cute.compile(
+        SampledDecide(
+            tp,
+            width,
+            rows,
+            local=local,
+            deadline_ns=deadline_ns,
+            debug=debug,
+            block=block,
+            topk=topk,
+        ),
+        *args,
+        make_fake_stream(),
+    )
 
 
-class _LaunchAttribute(ctypes.Structure):  # CUlaunchAttribute: id, pad to 8, a 64-byte value union
-    _fields_ = [("id", ctypes.c_uint32), ("pad", ctypes.c_uint8 * 4), ("value", ctypes.c_uint8 * 64)]
+class _LaunchAttribute(
+    ctypes.Structure
+):  # CUlaunchAttribute: id, pad to 8, a 64-byte value union
+    _fields_ = [
+        ("id", ctypes.c_uint32),
+        ("pad", ctypes.c_uint8 * 4),
+        ("value", ctypes.c_uint8 * 64),
+    ]
 
 
 class _LaunchConfig(ctypes.Structure):  # CUlaunchConfig
-    _fields_ = [(name, ctypes.c_uint) for name in ("gridDimX", "gridDimY", "gridDimZ", "blockDimX", "blockDimY",
-                                                   "blockDimZ", "sharedMemBytes")]
-    _fields_ += [("hStream", ctypes.c_void_p), ("attrs", ctypes.POINTER(_LaunchAttribute)), ("numAttrs", ctypes.c_uint)]
+    _fields_ = [
+        (name, ctypes.c_uint)
+        for name in (
+            "gridDimX",
+            "gridDimY",
+            "gridDimZ",
+            "blockDimX",
+            "blockDimY",
+            "blockDimZ",
+            "sharedMemBytes",
+        )
+    ]
+    _fields_ += [
+        ("hStream", ctypes.c_void_p),
+        ("attrs", ctypes.POINTER(_LaunchAttribute)),
+        ("numAttrs", ctypes.c_uint),
+    ]
 
 
 @cache
 def _libcuda_launch():
     function = ctypes.CDLL("libcuda.so.1").cuLaunchKernelEx
     function.restype = ctypes.c_int
-    function.argtypes = (ctypes.POINTER(_LaunchConfig), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+    function.argtypes = (
+        ctypes.POINTER(_LaunchConfig),
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
     return function
 
 
@@ -662,14 +898,20 @@ class _DriverLaunch:
         if got != list(sizes):
             raise RuntimeError(f"kernel parameter sizes {got}, expected {list(sizes)}")
         self.cu, self.function = cu, function
-        self.values = [ctypes.c_int64() if size == 8 else ctypes.c_int32() for size in sizes]
-        self.pointers = (ctypes.c_void_p * len(sizes))(*(ctypes.addressof(v) for v in self.values))
+        self.values = [
+            ctypes.c_int64() if size == 8 else ctypes.c_int32() for size in sizes
+        ]
+        self.pointers = (ctypes.c_void_p * len(sizes))(
+            *(ctypes.addressof(v) for v in self.values)
+        )
         self.address = ctypes.addressof(self.pointers)
         config = cu.CUlaunchConfig()
         config.blockDimX, config.blockDimY, config.blockDimZ = threads, 1, 1
         config.sharedMemBytes = shared
         attribute = cu.CUlaunchAttribute()
-        attribute.id = cu.CUlaunchAttributeID.CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
+        attribute.id = (
+            cu.CUlaunchAttributeID.CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
+        )
         attribute.value.programmaticStreamSerializationAllowed = 1
         config.attrs = [attribute]
         config.numAttrs = 1
@@ -684,8 +926,14 @@ class _DriverLaunch:
     def _raw_config(cu, function, config, threads, shared):
         """The same launch as ``config`` as a ctypes CUlaunchConfig; its plain fields must equal cuda-python's
         struct byte for byte (grid / block / shared memory at 0-27, numAttrs at 48), the PDL id must be 6."""
-        pdl = int(cu.CUlaunchAttributeID.CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION)
-        if pdl != 6 or ctypes.sizeof(_LaunchConfig) != 56 or ctypes.sizeof(_LaunchAttribute) != 72:
+        pdl = int(
+            cu.CUlaunchAttributeID.CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION
+        )
+        if (
+            pdl != 6
+            or ctypes.sizeof(_LaunchConfig) != 56
+            or ctypes.sizeof(_LaunchAttribute) != 72
+        ):
             raise RuntimeError("CUlaunchConfig layout")
         attribute = _LaunchAttribute()
         attribute.id = pdl
@@ -745,27 +993,62 @@ class SampledAccept:
     every rank's torch generator from server_args.random_seed). ``local``: one GPU, TP 1, no multicast. ``debug``
     (tests only): ``run`` also returns SampledDecide's dbg tensor."""
 
-    def __init__(self, group, device, rank, tp, *, width, vocab, softcap, seed, rows=None, deadline_ns=0,
-                 local=False, debug=False, block=BLOCK, topk=TOPK):
+    def __init__(
+        self,
+        group,
+        device,
+        rank,
+        tp,
+        *,
+        width,
+        vocab,
+        softcap,
+        seed,
+        rows=None,
+        deadline_ns=0,
+        local=False,
+        debug=False,
+        block=BLOCK,
+        topk=TOPK,
+    ):
         self.block, self.gamma, self.topk, self.rec = check_shape(block, topk)
-        if rows is None:  # 64 requests of the block: 512 at block 8 (as before), 320 at block 5 (512 % 5 != 0)
+        if (
+            rows is None
+        ):  # 64 requests of the block: 512 at block 8 (as before), 320 at block 5 (512 % 5 != 0)
             rows = 64 * block
-        if width % SLICE or tp * width >= 2**24 or not 0 < vocab <= tp * width or rows % block:
-            raise ValueError(f"sampled accept of vocab {vocab} over {tp} x {width} (rows {rows}, block {block})")
+        if (
+            width % SLICE
+            or tp * width >= 2**24
+            or not 0 < vocab <= tp * width
+            or rows % block
+        ):
+            raise ValueError(
+                f"sampled accept of vocab {vocab} over {tp} x {width} (rows {rows}, block {block})"
+            )
         if local != (tp == 1):
             raise ValueError("the sampled accept runs locally exactly at TP 1")
-        self.tp, self.rank, self.rows, self.width, self.device = tp, rank, rows, width, device
+        self.tp, self.rank, self.rows, self.width, self.device = (
+            tp,
+            rank,
+            rows,
+            width,
+            device,
+        )
         self.col_offset = rank * width
         self.valid = max(0, min(width, vocab - self.col_offset))
         if local:
-            self.box = torch.empty((2, tp, rows, self.rec), dtype=torch.int64, device=device)
+            self.box = torch.empty(
+                (2, tp, rows, self.rec), dtype=torch.int64, device=device
+            )
             self.bbox = torch.empty((2, rows, 2), dtype=torch.int64, device=device)
             self.mc = self.bmc = 0
         else:
             import torch.distributed as dist
             import torch.distributed._symmetric_memory as symm_mem
 
-            self.box = symm_mem.empty((2, tp, rows, self.rec), dtype=torch.int64, device=device)
+            self.box = symm_mem.empty(
+                (2, tp, rows, self.rec), dtype=torch.int64, device=device
+            )
             self.mc = int(symm_mem.rendezvous(self.box, group).multicast_ptr or 0)
             self.bbox = symm_mem.empty((2, rows, 2), dtype=torch.int64, device=device)
             self.bmc = int(symm_mem.rendezvous(self.bbox, group).multicast_ptr or 0)
@@ -773,39 +1056,90 @@ class SampledAccept:
                 raise RuntimeError("the sampled accept needs multicast memory")
         self.box.fill_(-1)  # every epoch all-ones: never a (31-bit) round
         self.bbox.fill_(-1)
-        self.scratch = torch.empty((rows, width // SLICE, 8), dtype=torch.float32, device=device)
+        self.scratch = torch.empty(
+            (rows, width // SLICE, 8), dtype=torch.float32, device=device
+        )
         self.count = torch.zeros(rows, dtype=torch.int32, device=device)
-        self.ctr = torch.tensor([0, seed & (2**63 - 1), 0], dtype=torch.int64, device=device)
+        self.ctr = torch.tensor(
+            [0, seed & (2**63 - 1), 0], dtype=torch.int64, device=device
+        )
         self.err = torch.zeros(1, dtype=torch.int32, device=device)
         torch.cuda.synchronize(device)
         if not local:
-            dist.barrier(group=group)  # every box initialized before any rank's first publish
+            dist.barrier(
+                group=group
+            )  # every box initialized before any rank's first publish
         # Both shard dtypes at build time (the verify head's output dtype is the model's: BF16 for K3.1).
-        self.stats = {SHARD_DTYPES[d]: compile_sampled_stats(tp, width, softcap, rows, local, d, block, topk)
-                      for d in SHARD_DTYPES}
-        self.decide = compile_sampled_decide(tp, width, rows, local, deadline_ns, debug, block, topk)
+        self.stats = {
+            SHARD_DTYPES[d]: compile_sampled_stats(
+                tp, width, softcap, rows, local, d, block, topk
+            )
+            for d in SHARD_DTYPES
+        }
+        self.decide = compile_sampled_decide(
+            tp, width, rows, local, deadline_ns, debug, block, topk
+        )
         self.debug = debug
         self.parity, self.calls = 0, 0
         address = lambda t: cutlass.Int64(t.data_ptr())
-        self.fixed = (address(self.ctr), address(self.scratch), address(self.count), address(self.err))
-        multicast = lambda base, t, p: cutlass.Int64(base + p * t[p].numel() * t.element_size() if base else 0)
-        self.boxes = tuple((address(self.box[p]), multicast(self.mc, self.box, p), address(self.bbox[p]),
-                            multicast(self.bmc, self.bbox, p)) for p in (0, 1))
-        self.scalars = (cutlass.Int32(rank), cutlass.Int32(self.col_offset), cutlass.Int32(self.valid))
+        self.fixed = (
+            address(self.ctr),
+            address(self.scratch),
+            address(self.count),
+            address(self.err),
+        )
+        multicast = lambda base, t, p: cutlass.Int64(
+            base + p * t[p].numel() * t.element_size() if base else 0
+        )
+        self.boxes = tuple(
+            (
+                address(self.box[p]),
+                multicast(self.mc, self.box, p),
+                address(self.bbox[p]),
+                multicast(self.bmc, self.bbox, p),
+            )
+            for p in (0, 1)
+        )
+        self.scalars = (
+            cutlass.Int32(rank),
+            cutlass.Int32(self.col_offset),
+            cutlass.Int32(self.valid),
+        )
         # The driver launch (not with debug): the same arguments as plain ints.
-        self.raw_fixed = tuple(int(t.data_ptr()) for t in (self.ctr, self.scratch, self.count, self.err))
-        raw_mc = lambda base, t, p: base + p * t[p].numel() * t.element_size() if base else 0
-        self.raw_boxes = tuple((int(self.box[p].data_ptr()), raw_mc(self.mc, self.box, p), int(self.bbox[p].data_ptr()),
-                                raw_mc(self.bmc, self.bbox, p)) for p in (0, 1))
+        self.raw_fixed = tuple(
+            int(t.data_ptr()) for t in (self.ctr, self.scratch, self.count, self.err)
+        )
+        raw_mc = lambda base, t, p: (
+            base + p * t[p].numel() * t.element_size() if base else 0
+        )
+        self.raw_boxes = tuple(
+            (
+                int(self.box[p].data_ptr()),
+                raw_mc(self.mc, self.box, p),
+                int(self.bbox[p].data_ptr()),
+                raw_mc(self.bmc, self.bbox, p),
+            )
+            for p in (0, 1)
+        )
         self.driver, self.launch_mode, self.rings = None, "cute", {}
         if not debug:
             try:
-                stats = {dt: _DriverLaunch(code, device, STATS_SIZES, STATS_THREADS, 1024)
-                         for dt, code in self.stats.items()}
+                stats = {
+                    dt: _DriverLaunch(code, device, STATS_SIZES, STATS_THREADS, 1024)
+                    for dt, code in self.stats.items()
+                }
                 # SampledDecide's smem: recs (block, tp, rec) FP32 + accepted / tokens; block 8 / K 16: 768 tp + 1024
-                decide = _DriverLaunch(self.decide, device, DECIDE_SIZES, 32 * block, 4 * block * self.rec * tp + 1024)
+                decide = _DriverLaunch(
+                    self.decide,
+                    device,
+                    DECIDE_SIZES,
+                    32 * block,
+                    4 * block * self.rec * tp + 1024,
+                )
                 self.driver = (stats, decide)
-                self.launch_mode = "driver/" + "/".join(sorted({k.mode for k in (*stats.values(), decide)}))
+                self.launch_mode = "driver/" + "/".join(
+                    sorted({k.mode for k in (*stats.values(), decide)})
+                )
             except Exception as error:  # noqa: BLE001 (any mismatch keeps the CuTe call)
                 self.launch_mode = f"cute ({type(error).__name__}: {str(error)[:160]})"
 
@@ -814,12 +1148,23 @@ class SampledAccept:
         ring = self.rings.get(b)
         if ring is None:
             block = self.block
-            store = torch.empty((RING, b * (block + 2)), dtype=torch.int64, device=device)
+            store = torch.empty(
+                (RING, b * (block + 2)), dtype=torch.int64, device=device
+            )
             slots = []
             for row in store:
-                bonus, target = row[:b], row[b:b * (block + 1)].view(b, block)
-                accept_len = row[b * (block + 1):].view(torch.int32)[:b]
-                slots.append((accept_len, bonus, target, accept_len.data_ptr(), bonus.data_ptr(), target.data_ptr()))
+                bonus, target = row[:b], row[b : b * (block + 1)].view(b, block)
+                accept_len = row[b * (block + 1) :].view(torch.int32)[:b]
+                slots.append(
+                    (
+                        accept_len,
+                        bonus,
+                        target,
+                        accept_len.data_ptr(),
+                        bonus.data_ptr(),
+                        target.data_ptr(),
+                    )
+                )
             ring = self.rings[b] = [slots, 0]
         slots, i = ring
         ring[1] = (i + 1) % RING
@@ -833,7 +1178,9 @@ class SampledAccept:
         return torch.cuda.current_stream(device).cuda_stream
 
     def fits(self, requests, logits=None):
-        return 0 < requests * self.block <= self.rows and (logits is None or logits.dtype in self.stats)
+        return 0 < requests * self.block <= self.rows and (
+            logits is None or logits.dtype in self.stats
+        )
 
     def run(self, logits, temperatures, candidates, candidate_ids, q_rows, parity=None):
         """logits [block B, W] FP32 or BF16 (this rank's raw shard), temperatures [B] (or [B, 1]), candidates
@@ -842,14 +1189,21 @@ class SampledAccept:
         argmax). block / K: this build's (8 / 16 by default)."""
         b = candidates.shape[0]
         block, gamma, topk = self.block, self.gamma, self.topk
-        if (not self.fits(b, logits) or tuple(logits.shape) != (b * block, self.width)
-                or not logits.is_contiguous() or tuple(candidates.shape) != (b, block)
-                or tuple(candidate_ids.shape) != (b, gamma, topk) or tuple(q_rows.shape) != (b, gamma, topk)
-                or temperatures.numel() != b):
-            raise ValueError(f"sampled accept of logits {tuple(logits.shape)} {logits.dtype}, candidates "
-                             f"{tuple(candidates.shape)}, candidate_ids {tuple(candidate_ids.shape)}, q_rows "
-                             f"{tuple(q_rows.shape)}, temperatures {tuple(temperatures.shape)} (width "
-                             f"{self.width}, rows {self.rows})")
+        if (
+            not self.fits(b, logits)
+            or tuple(logits.shape) != (b * block, self.width)
+            or not logits.is_contiguous()
+            or tuple(candidates.shape) != (b, block)
+            or tuple(candidate_ids.shape) != (b, gamma, topk)
+            or tuple(q_rows.shape) != (b, gamma, topk)
+            or temperatures.numel() != b
+        ):
+            raise ValueError(
+                f"sampled accept of logits {tuple(logits.shape)} {logits.dtype}, candidates "
+                f"{tuple(candidates.shape)}, candidate_ids {tuple(candidate_ids.shape)}, q_rows "
+                f"{tuple(q_rows.shape)}, temperatures {tuple(temperatures.shape)} (width "
+                f"{self.width}, rows {self.rows})"
+            )
         # Conversions only when needed: each no-op call still costs host time on the eager path.
         if temperatures.dtype != torch.float32 or not temperatures.is_contiguous():
             temperatures = temperatures.reshape(b).to(torch.float32).contiguous()
@@ -861,27 +1215,66 @@ class SampledAccept:
             q_rows = q_rows.to(torch.float32).contiguous()
         logits_address = logits.data_ptr()
         if logits_address % (16 if logits.dtype == torch.float32 else 8):
-            raise ValueError("sampled accept needs 16-byte (FP32) / 8-byte (BF16) aligned logits")
+            raise ValueError(
+                "sampled accept needs 16-byte (FP32) / 8-byte (BF16) aligned logits"
+            )
         if parity is None:
             parity, self.parity = self.parity, self.parity ^ 1
-        if self.driver is not None:  # outputs from the per-bs ring (RING), no allocation or view per call
-            accept_len, bonus, target, accept_address, bonus_address, target_address = self.ring_outputs(
-                b, logits.device)
+        if (
+            self.driver is not None
+        ):  # outputs from the per-bs ring (RING), no allocation or view per call
+            accept_len, bonus, target, accept_address, bonus_address, target_address = (
+                self.ring_outputs(b, logits.device)
+            )
             stats, decide = self.driver
             box, mc, bbox, bmc = self.raw_boxes[parity]
             ctr, scratch, count, err = self.raw_fixed
             handle = self.driver_stream(logits.device)
             ids = candidate_ids.data_ptr()
-            stats[logits.dtype]((b * block, self.width // SLICE), handle, (
-                logits_address, temperatures.data_ptr(), ids, ctr, scratch, count, box, mc, self.rank,
-                self.col_offset, self.valid, b * block))
-            decide((b, 1), handle, (box, bbox, bmc, self.rank, ctr, candidates.data_ptr(), ids, q_rows.data_ptr(),
-                                    accept_address, bonus_address, target_address, err, b))
+            stats[logits.dtype](
+                (b * block, self.width // SLICE),
+                handle,
+                (
+                    logits_address,
+                    temperatures.data_ptr(),
+                    ids,
+                    ctr,
+                    scratch,
+                    count,
+                    box,
+                    mc,
+                    self.rank,
+                    self.col_offset,
+                    self.valid,
+                    b * block,
+                ),
+            )
+            decide(
+                (b, 1),
+                handle,
+                (
+                    box,
+                    bbox,
+                    bmc,
+                    self.rank,
+                    ctr,
+                    candidates.data_ptr(),
+                    ids,
+                    q_rows.data_ptr(),
+                    accept_address,
+                    bonus_address,
+                    target_address,
+                    err,
+                    b,
+                ),
+            )
             self.calls += 1
             return accept_len, bonus, target
-        out = torch.empty(b * (block + 2), dtype=torch.int64, device=logits.device)  # one allocation for the three
-        bonus, target = out[:b], out[b:b * (block + 1)].view(b, block)
-        accept_len = out[b * (block + 1):].view(torch.int32)[:b]
+        out = torch.empty(
+            b * (block + 2), dtype=torch.int64, device=logits.device
+        )  # one allocation for the three
+        bonus, target = out[:b], out[b : b * (block + 1)].view(b, block)
+        accept_len = out[b * (block + 1) :].view(torch.int32)[:b]
         box, mc, bbox, bmc = self.boxes[parity]
         ctr, scratch, count, err = self.fixed
         rank, col_offset, valid = self.scalars
@@ -890,12 +1283,44 @@ class SampledAccept:
         s = stream(logits.device)
         extra = ()
         if self.debug:
-            dbg = torch.zeros((b, block, 8 + self.tp * self.rec), dtype=torch.float32, device=logits.device)
+            dbg = torch.zeros(
+                (b, block, 8 + self.tp * self.rec),
+                dtype=torch.float32,
+                device=logits.device,
+            )
             extra = (address(dbg),)
-        self.stats[logits.dtype](address(logits), address(temperatures), ids, ctr, scratch, count, box, mc, rank,
-                                 col_offset, valid, cutlass.Int32(b * block), s)
-        self.decide(box, bbox, bmc, rank, ctr, address(candidates), ids, address(q_rows), address(accept_len),
-                    address(bonus), address(target), err, cutlass.Int32(b), *extra, s)
+        self.stats[logits.dtype](
+            address(logits),
+            address(temperatures),
+            ids,
+            ctr,
+            scratch,
+            count,
+            box,
+            mc,
+            rank,
+            col_offset,
+            valid,
+            cutlass.Int32(b * block),
+            s,
+        )
+        self.decide(
+            box,
+            bbox,
+            bmc,
+            rank,
+            ctr,
+            address(candidates),
+            ids,
+            address(q_rows),
+            address(accept_len),
+            address(bonus),
+            address(target),
+            err,
+            cutlass.Int32(b),
+            *extra,
+            s,
+        )
         self.calls += 1
         if self.debug:
             return accept_len, bonus, target, dbg

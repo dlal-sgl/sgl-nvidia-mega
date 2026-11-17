@@ -261,7 +261,10 @@ class PreparedMla:
         qnorm, kvnorm, qb, uk, uv, qinv, kinv = self.views
         q_slots, x = to_cute(slots[:batch], 8), to_cute(projected[:, :2112])
         q_args = (x, qnorm, kvnorm, qb, uk, kv, q_slots, qinv, kinv, self.eps, query)
-        out_view, gate = to_cute(out), to_cute(projected[:, 2112 : 2112 + self.heads * 128])
+        out_view, gate = (
+            to_cute(out),
+            to_cute(projected[:, 2112 : 2112 + self.heads * 128]),
+        )
         lens = to_cute(lengths[:reqs], 4)
         if self.dcp is not None:  # DcpValue zeroes padded requests (global lengths)
             publish, ((rows, rows_lse), boxes, peers), ids = self.dcp_args[batch]

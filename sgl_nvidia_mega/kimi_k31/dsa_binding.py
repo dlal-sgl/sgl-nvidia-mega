@@ -38,9 +38,23 @@ class SparseDecodeStep:
         if self.sparse not in (0, 1):
             raise ValueError("decode graph mode must be dense(0) or sparse(1)")
         rows = self.mla.sequence_lengths.numel()
-        if self.mla.sequence_lengths.shape != (rows,) or rows not in (1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64):
+        if self.mla.sequence_lengths.shape != (rows,) or rows not in (
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            16,
+            32,
+            64,
+        ):
             raise ValueError("K3.1 sparse decode needs a supported request vector")
-        if self.mla.write_slots.shape != (rows,) or self.kda.state_indices.shape != (rows,):
+        if self.mla.write_slots.shape != (rows,) or self.kda.state_indices.shape != (
+            rows,
+        ):
             raise ValueError("decode slots must have one entry per request")
         if self.mla.block_table.ndim != 2 or self.mla.block_table.shape[0] != rows:
             raise ValueError("decode page table must have one row per request")

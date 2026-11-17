@@ -332,7 +332,9 @@ class OprojConsumer:
         for rank in cutlass.range_constexpr(n):
             if rank < count:
                 exponent = (raw[rank, 2] >> shift) & Uint32(0xFF)
-                factor = bits_float(exponent << 23)  # 2^(e - 127); e >= 85 (1e-10 floor)
+                factor = bits_float(
+                    exponent << 23
+                )  # 2^(e - 127); e >= 85 (1e-10 floor)
                 for w in cutlass.range_constexpr(2):
                     quad = unpack_fp8(raw[rank, w])
                     for i in cutlass.range_constexpr(4):
@@ -342,7 +344,9 @@ class OprojConsumer:
             pair = (decoded[0, 2 * j], decoded[0, 2 * j + 1])
             for rank in cutlass.range_constexpr(1, n):
                 if rank < count:
-                    pair = pair_op(pair, (decoded[rank, 2 * j], decoded[rank, 2 * j + 1]))
+                    pair = pair_op(
+                        pair, (decoded[rank, 2 * j], decoded[rank, 2 * j + 1])
+                    )
             values[2 * j], values[2 * j + 1] = pair[0], pair[1]
         return values
 
@@ -503,7 +507,10 @@ class OprojConsumer:
                     if lane == 0:
                         for peer in cutlass.range_constexpr(7):
                             push_float(
-                                at(norm_post, rank, warp), square, bars.iterator + 2, peer
+                                at(norm_post, rank, warp),
+                                square,
+                                bars.iterator + 2,
+                                peer,
                             )
                     self.wait_exchange(bars.iterator + 2)
                     if tid == 0:
@@ -553,7 +560,9 @@ class OprojFused:
     def __init__(self, nb, *, has_delta=True, fp8=False, norm_fold=False):
         self.producer = OprojProducer(768, staged_blocks=0, fp8=fp8)
         # TP16 requires prefix/blocks to be ready at launch.
-        self.consumer = OprojConsumer(nb, has_delta=has_delta, fp8=fp8, norm_fold=norm_fold)
+        self.consumer = OprojConsumer(
+            nb, has_delta=has_delta, fp8=fp8, norm_fold=norm_fold
+        )
 
     @cute.jit
     def __call__(self, *args):

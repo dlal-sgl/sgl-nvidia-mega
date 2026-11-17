@@ -24,16 +24,19 @@ import torch
 from sglang.srt.distributed.communication_op import (
     tensor_model_parallel_all_reduce,
 )
-from sgl_nvidia_mega.kimi_k31.k3._host import HybridPoolView
 from sglang.srt.runtime_context import get_parallel
+
+from sgl_nvidia_mega.kimi_k31.k3._host import HybridPoolView
 
 from .projection_storage import (
     coalesce_kda_projection_storage,
     coalesce_mla_projection_storage,
     kda_pitch,
-    rank_heads,
 )
 from .projection_storage import mla_pitch as packed_mla_pitch
+from .projection_storage import (
+    rank_heads,
+)
 
 PAYLOAD_PACKAGE = "sgl_nvidia_mega.kimi_k31.sm103.k3"
 _BATCHES = (1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64)
@@ -309,9 +312,7 @@ def _final_proxy(backbone: Any) -> Any:
     )
 
 
-def _mla_proxy(
-    attention: Any, heads: int
-) -> tuple[Any, tuple[torch.Tensor, ...]]:
+def _mla_proxy(attention: Any, heads: int) -> tuple[Any, tuple[torch.Tensor, ...]]:
     source_w_uk = attention.w_kc
     if source_w_uk.shape != (heads, 128, 512):
         raise ValueError(f"unsupported MLA W_UK_T shape: {source_w_uk.shape}")

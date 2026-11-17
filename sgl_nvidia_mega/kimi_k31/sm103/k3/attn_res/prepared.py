@@ -78,11 +78,16 @@ def check_aux(side, shadow, fail=True):
     bad = (side.view(torch.int16) != shadow.view(torch.int16)).sum()
     if fail:
         torch._assert_async(bad == 0)
-    if not torch.cuda.is_current_stream_capturing() and _CHECKS_LOGGED[0] < AUX_SIDE_CHECK:
+    if (
+        not torch.cuda.is_current_stream_capturing()
+        and _CHECKS_LOGGED[0] < AUX_SIDE_CHECK
+    ):
         _CHECKS_LOGGED[0] += 1
         logger.info(
             "NVIDIA megakernel: aux side check %d: %d of %d BF16 words differ",
-            _CHECKS_LOGGED[0], int(bad), side.numel(),
+            _CHECKS_LOGGED[0],
+            int(bad),
+            side.numel(),
         )
     return bad
 
@@ -96,8 +101,18 @@ def _consumer_args(slots, cap, aux):
 
 @cache
 def compile_consumer(
-    nb, delta, write, final, slots, cap, arch, deadline_ns, aux=False, mixture=False,
-    aux_launch=True, carveout=None,
+    nb,
+    delta,
+    write,
+    final,
+    slots,
+    cap,
+    arch,
+    deadline_ns,
+    aux=False,
+    mixture=False,
+    aux_launch=True,
+    carveout=None,
 ):
     # ``carveout`` only keys the cache: a K31MK_ATTNRES_CARVEOUT compile is its own copy (its own function attribute).
     kernel = ClusterAttnRes(
@@ -118,7 +133,9 @@ def compile_consumer(
 def compile_aux_mixture(nb, slots, cap, arch):
     """``AuxMixture`` alone (score + combine) over a consumer's argument list."""
     args = _consumer_args(slots, cap, True)
-    return cute.compile(AuxMixture(nb), *args, make_fake_stream(), options=f"--gpu-arch={arch}")
+    return cute.compile(
+        AuxMixture(nb), *args, make_fake_stream(), options=f"--gpu-arch={arch}"
+    )
 
 
 class PreparedAttnRes:
@@ -132,19 +149,35 @@ class PreparedAttnRes:
         self.code = self._compile(0, 0)
         self.ring: Any = None
         self.aux: Any = None
-        self.aux_side: Any = None  # (plain, ring) AuxMixture codes when it runs on a side stream
+        self.aux_side: Any = (
+            None  # (plain, ring) AuxMixture codes when it runs on a side stream
+        )
 
     def _compile(self, slots, cap, aux=False, mixture=False, aux_launch=True):
         arch = architecture(self.device)
         value = attnres_carveout()
         if value is not None:
             code = compile_consumer(
-                *self.key, slots, cap, arch, self.deadline_ns, aux, mixture, aux_launch, carveout=value
+                *self.key,
+                slots,
+                cap,
+                arch,
+                self.deadline_ns,
+                aux,
+                mixture,
+                aux_launch,
+                carveout=value,
             )
-            if not _CARVEOUT_LOGGED:  # use-time (the consumer the layer runs), once per process
+            if (
+                not _CARVEOUT_LOGGED
+            ):  # use-time (the consumer the layer runs), once per process
                 _CARVEOUT_LOGGED.append(True)
-                logger.info("NVIDIA megakernel: K31MK_ATTNRES_CARVEOUT=%d engaged (AttnRes consumers keep a %d %% "
-                            "shared-memory carve-out)", value, value)
+                logger.info(
+                    "NVIDIA megakernel: K31MK_ATTNRES_CARVEOUT=%d engaged (AttnRes consumers keep a %d %% "
+                    "shared-memory carve-out)",
+                    value,
+                    value,
+                )
             return prepare_shared_carveout(code, self.device.index, value)
         return compile_consumer(
             *self.key, slots, cap, arch, self.deadline_ns, aux, mixture, aux_launch
@@ -182,9 +215,14 @@ class PreparedAttnRes:
         self.aux = self._compile(0, 0, True, mixture, not side), ring
         if side:
             self.aux_side = compile_aux_mixture(self.key[0], 0, 0, arch), side_ring
-            if AUX_SIDE_CHECK and not _CHECK_ON_LOGGED:  # once per process, not per consumer
+            if (
+                AUX_SIDE_CHECK and not _CHECK_ON_LOGGED
+            ):  # once per process, not per consumer
                 _CHECK_ON_LOGGED.append(True)
-                logger.info("NVIDIA megakernel: aux side check on (K31MK_AUX_SIDE_CHECK=%d)", AUX_SIDE_CHECK)
+                logger.info(
+                    "NVIDIA megakernel: aux side check on (K31MK_AUX_SIDE_CHECK=%d)",
+                    AUX_SIDE_CHECK,
+                )
 
     def run_ring(self, prefix, blocks, out, aux=None):
         code = self.ring[0] if aux is None else self.aux[1]
@@ -215,7 +253,14 @@ class PreparedAttnRes:
             check = None
             if AUX_SIDE_CHECK:  # today's serial order, on main, into a shadow slice
                 shadow = torch.empty_like(aux_rows)
-                side(source, prefix, blocks, *args[:-1], dynamic_view(shadow), stream(self.device))
+                side(
+                    source,
+                    prefix,
+                    blocks,
+                    *args[:-1],
+                    dynamic_view(shadow),
+                    stream(self.device),
+                )
                 check = aux_rows, shadow
             _PENDING_AUX.append((done, check))
         return out

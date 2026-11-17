@@ -263,8 +263,10 @@ class ExpertsPlanKernel:
             if chunk < 448:  # warp-uniform: chunks 256-447 are warps 0-5
                 source = x.iterator + token * 3584 + chunk * 8
                 if cutlass.const_expr(x.element_type == Float32):
-                    words = (*load_words(source, count=4, mutable=True),
-                             *load_words(source + 4, count=4, mutable=True))
+                    words = (
+                        *load_words(source, count=4, mutable=True),
+                        *load_words(source + 4, count=4, mutable=True),
+                    )
                     plan_chunk(plan, token, chunk, words, fp32=True)
                 else:
                     words = load_words(source, count=4, mutable=True)
@@ -397,7 +399,9 @@ class ExpertsKernel(ExpertsGeometry):
         (wait_tmem if tmem else wait)(barrier, phase, scope=scope)
 
     @cute.jit
-    def route(self, sm, ids, counters, batch: Int32, hoisted: cutlass.Constexpr = False):
+    def route(
+        self, sm, ids, counters, batch: Int32, hoisted: cutlass.Constexpr = False
+    ):
         """Dedupe after the dependency wait. Capacity <= 2: one work item per routing
         pair; else first occurrences across tokens in order, keeping token slots."""
         tid, warp, lane, cta = thread()
@@ -536,9 +540,13 @@ class ExpertsKernel(ExpertsGeometry):
                 mine[k] = ids[tid + self.threads * k]
         if cutlass.const_expr(counted):
             if tid == 0:
-                scalars[1] = view(workspace.iterator, self.ws_counter, Int32, MAX_CTAS)[cta]
+                scalars[1] = view(workspace.iterator, self.ws_counter, Int32, MAX_CTAS)[
+                    cta
+                ]
             if tid == 1:
-                scalars[2] = view(workspace.iterator, self.ws_calls, Int32, MAX_CTAS)[cta]
+                scalars[2] = view(workspace.iterator, self.ws_calls, Int32, MAX_CTAS)[
+                    cta
+                ]
         for i in range(tid, 2 * self.experts, self.threads):
             masks[i] = Uint32(0)
         for i in range(tid, 4 * self.units, self.threads):
@@ -1141,7 +1149,9 @@ class ExpertsKernel(ExpertsGeometry):
                         values[i] = bits_float(raw[index, i // 4, i % 4])
                     packed, scale = mx_values(values)
                 else:
-                    packed, scale = mx_block([raw[index, i // 4, i % 4] for i in range(16)])
+                    packed, scale = mx_block(
+                        [raw[index, i // 4, i % 4] for i in range(16)]
+                    )
                 for half, words in enumerate((packed[:4], packed[4:])):
                     offset = swizzled(16 * stage + 2 * kblock + half, token, self.off_x)
                     store_shared_words(sm.iterator + offset, words)
@@ -1336,7 +1346,9 @@ class ExpertsKernel(ExpertsGeometry):
         start = (tile - self.tiles * ranges[group, 0]) * 14
         owner = start >= ranges[group, 2]
         if not owner:
-            offset = self.ws_partial + ((Int64(group) * MAX_CTAS + cta) * 1024 + row) * 4
+            offset = (
+                self.ws_partial + ((Int64(group) * MAX_CTAS + cta) * 1024 + row) * 4
+            )
             for t in cutlass.range_constexpr(self.width):
                 if t < live:
                     store_words(ws + offset + t * 512, (float_bits(values[t]),))
@@ -1587,7 +1599,9 @@ class ExpertsKernel(ExpertsGeometry):
                 table[i] = Int32(2147483647)
             if tid == 160:
                 parity = view(sm.iterator, self.off_misc + 864, Int32, 1)
-                parity[0] = view(workspace.iterator, self.ws_counter, Int32, MAX_CTAS)[cta]
+                parity[0] = view(workspace.iterator, self.ws_counter, Int32, MAX_CTAS)[
+                    cta
+                ]
         cute.arch.griddepcontrol_wait()
         counters = view(workspace.iterator, self.ws_counter, Int32, MAX_CTAS)
         if cutlass.const_expr(self.grouped):
@@ -1604,11 +1618,14 @@ class ExpertsKernel(ExpertsGeometry):
             distinct, call_count, generation = (routed[0], routed[1], routed[2])
             experts = self.tables(sm)[0]
         else:
-            distinct, call_count, experts = self.route(sm, ids, counters, batch, hoisted)
+            distinct, call_count, experts = self.route(
+                sm, ids, counters, batch, hoisted
+            )
             generation = call_count
             fragments: cutlass.Constexpr = 8 if x.element_type == Float32 else 4
-            layout = cute.make_layout((self.rounds, fragments, 4),
-                                      stride=(fragments * 4, 4, 1))
+            layout = cute.make_layout(
+                (self.rounds, fragments, 4), stride=(fragments * 4, 4, 1)
+            )
             raw_x = cute.make_rmem_tensor(layout, Uint32)
             if warp >= 2:
                 if cutlass.const_expr(self.planned_x):

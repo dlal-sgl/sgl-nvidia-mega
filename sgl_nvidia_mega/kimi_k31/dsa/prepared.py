@@ -11,8 +11,8 @@ import os
 
 import torch
 
-from sgl_nvidia_mega.kimi_k31.sm103.k3.common.host import stream, to_cute
 from sgl_nvidia_mega.kimi_k31.sm103.folded_index import PreparedIndexMla
+from sgl_nvidia_mega.kimi_k31.sm103.k3.common.host import stream, to_cute
 
 from .indexer import IndexProjection, IndexWeights, PagedSelection
 from .mla import SparseMla
@@ -37,12 +37,16 @@ class PreparedSparseIndexMla(PreparedIndexMla):
             attention.q_a_layernorm.weight,
             float(attention.rms_norm_eps),
         )
-        self.fused_rows = {r for r in self.pitches if FUSED_INDEX_Q and r <= FUSED_INDEX_Q_MAX_ROWS}
+        self.fused_rows = {
+            r for r in self.pitches if FUSED_INDEX_Q and r <= FUSED_INDEX_Q_MAX_ROWS
+        }
         if self.fused_rows:
             from ..sm103.dsa.index_q import FusedIndexQuery
         self.sparse_rows = {
             rows: (
-                FusedIndexQuery(weights, rows) if rows in self.fused_rows else IndexProjection(weights, rows),
+                FusedIndexQuery(weights, rows)
+                if rows in self.fused_rows
+                else IndexProjection(weights, rows),
                 PagedSelection(self.device, rows),
                 SparseMla(self.device, self.max_seq, rows, heads=self.heads),
             )
@@ -50,7 +54,9 @@ class PreparedSparseIndexMla(PreparedIndexMla):
         }
         self.hidden = None
         self.padded_values = {}
-        self.index_projection, self.selection, self.sparse_mla = next(iter(self.sparse_rows.values()))
+        self.index_projection, self.selection, self.sparse_mla = next(
+            iter(self.sparse_rows.values())
+        )
         self.sparse = False
         self.index_step = None
 
@@ -61,9 +67,13 @@ class PreparedSparseIndexMla(PreparedIndexMla):
     def prepare_gate(self, hidden):
         if self.sparse:
             rows = hidden.shape[0]
-            self.index_projection, self.selection, self.sparse_mla = self.sparse_rows[rows]
+            self.index_projection, self.selection, self.sparse_mla = self.sparse_rows[
+                rows
+            ]
             if rows in self.fused_rows:
-                self.hidden = hidden  # the fused index-query kernel computes the head gate itself
+                self.hidden = (
+                    hidden  # the fused index-query kernel computes the head gate itself
+                )
             else:
                 self.index_projection.prepare_gate(hidden)
 
@@ -77,7 +87,12 @@ class PreparedSparseIndexMla(PreparedIndexMla):
             for rows, q in self.kernels:
                 if q == 1 and rows in self.fused_rows:
                     self.padded_values[rows] = _padded_value(
-                        rows, self.heads, self.pitches[rows], layout(self.weights[4]), self.device.index, 1
+                        rows,
+                        self.heads,
+                        self.pitches[rows],
+                        layout(self.weights[4]),
+                        self.device.index,
+                        1,
                     )
         return out
 

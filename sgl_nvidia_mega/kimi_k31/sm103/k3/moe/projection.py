@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
 """MoE FP32 latent publication, without modifying other projection publishers."""
+
 import cutlass as c
 import cutlass.cute as cute
-from ..gemm.ws_gemm import WsGemm, positive_zero32
+
 from ..common.primitives import multicast_words
+from ..gemm.ws_gemm import WsGemm, positive_zero32
 
 
 class Fp32FrontGemm(WsGemm):

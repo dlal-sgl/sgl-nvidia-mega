@@ -4,8 +4,9 @@
 
 import cutlass as c
 import cutlass.cute as cute
+
 from ..common.primitives import asm
-from .shared import situ_gate, situ_up, situ_product
+from .shared import situ_gate, situ_product, situ_up
 
 
 @asm(c.Float32, pure=True)

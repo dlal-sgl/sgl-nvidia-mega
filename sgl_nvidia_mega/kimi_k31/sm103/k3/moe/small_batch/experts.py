@@ -50,7 +50,6 @@ from ...common.primitives import (
     warp_max_abs,
 )
 from ..experts import hidden_exponent
-
 from ..math import routed_situ as situ
 
 
@@ -490,8 +489,9 @@ class ClusterExpertsTP8(_ClusterExperts):
                     for k in cutlass.range_constexpr(4):
                         packed[i, k] = words[k]
                     if cutlass.const_expr(fp32):
-                        high = load_words(x.iterator + 8 * (xtid + 192 * i) + 4,
-                                          count=4, mutable=True)
+                        high = load_words(
+                            x.iterator + 8 * (xtid + 192 * i) + 4, count=4, mutable=True
+                        )
                         for k in cutlass.range_constexpr(4):
                             packed[i, k + 4] = high[k]
             for i in cutlass.range_constexpr(3):

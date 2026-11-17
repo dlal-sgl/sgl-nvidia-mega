@@ -72,7 +72,9 @@ class ConvSplitKGemm(SplitKGemm):
         super().__init__(tactic=tactic)
         self.early_trigger = early_trigger
         if tactic.mma_n != BLOCK or tactic.mma_m % 4:
-            raise ValueError("the folded conv wants N tile = one 8-row block, M % 4 == 0")
+            raise ValueError(
+                "the folded conv wants N tile = one 8-row block, M % 4 == 0"
+            )
 
     @cute.experimental.jit
     def __call__(
@@ -252,8 +254,12 @@ class ConvSplitKGemm(SplitKGemm):
             # tile the epilogue warps just stored (after the named barrier).
             delta = load_words(at(mC, 4 * g, row, l_idx), count=2, mutable=True)
             c0, c1 = unpack_bf16(delta[0])
-            base0 = load_f32x4(at(mBase, 0, ch, 0)) + load_f32x4(at(mBase, 0, ch + 4, 0))
-            base1 = load_f32x4(at(mBase, 1, ch, 0)) + load_f32x4(at(mBase, 1, ch + 4, 0))
+            base0 = load_f32x4(at(mBase, 0, ch, 0)) + load_f32x4(
+                at(mBase, 0, ch + 4, 0)
+            )
+            base1 = load_f32x4(at(mBase, 1, ch, 0)) + load_f32x4(
+                at(mBase, 1, ch + 4, 0)
+            )
             # Row 0 of a block has no previous row: weight 0 on a re-read of itself
             # (scalars only; no register tensors or branch-local writes).
             prev_row, keep = row - 1, Float32(1.0)
@@ -269,7 +275,9 @@ class ConvSplitKGemm(SplitKGemm):
                     i = 2 * j + h
                     tap1 = (base1[i] + c1) * keep
                     out.append((base0[i] + c0) * x[h] + tap1 * p[h])
-            packed = tuple(pack_pair(out[2 * j], out[2 * j + 1], policy=None) for j in range(4))
+            packed = tuple(
+                pack_pair(out[2 * j], out[2 * j + 1], policy=None) for j in range(4)
+            )
             store_words(at(mOut, row, ch, 0), packed)
 
 
@@ -317,7 +325,13 @@ class PreparedConvProjection:
         if x.shape[0] != self.rows:
             raise ValueError(f"conv projection rows {x.shape[0]} != {self.rows}")
         y = matrix_view(delta, output=True)
-        args = (self.weight_view, matrix_view(x), y, y, cutlass.Int64(self.map.data_ptr()))
+        args = (
+            self.weight_view,
+            matrix_view(x),
+            y,
+            y,
+            cutlass.Int64(self.map.data_ptr()),
+        )
         args += (matrix_view(base), matrix_view(x_out))
         self.code(*args, current_stream(self.device))
         return x_out

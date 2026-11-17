@@ -5,6 +5,7 @@ The existing executor, KDA rings, MoE, projection and aux consumers are reused.
 Index-K is written for all query rows before scoring. Native paged MQA matches
 stock's [1,Q,H,D] score layout; per-row causal lengths mask top-k selection.
 """
+
 import logging
 import os
 from dataclasses import dataclass
@@ -13,18 +14,24 @@ from functools import cache
 import cutlass.cute as cute
 import torch
 from cutlass.cute.runtime import make_fake_stream
-
-from sgl_nvidia_mega.kimi_k31.sm103.k3.common.host import fake, layout, stream, to_cute
-from sgl_nvidia_mega.kimi_k31.sm103.k3.mla.value import MlaValue
-from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
-from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import is_one_nvlink_clique
-from sglang.srt.distributed.device_communicators.triton_symm_mem_ag import all_gather_inner, create_state
+from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
+    is_one_nvlink_clique,
+)
+from sglang.srt.distributed.device_communicators.triton_symm_mem_ag import (
+    all_gather_inner,
+    create_state,
+)
 from sglang.srt.distributed.parallel_state import in_the_same_node_as
 from sglang.srt.layers.attention.dsa import dsa_dcp_sharded as DCP_SHARDED
 from sglang.srt.runtime_context import get_parallel
+
+from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
+from sgl_nvidia_mega.kimi_k31.sm103.k3.common.host import fake, layout, stream, to_cute
+from sgl_nvidia_mega.kimi_k31.sm103.k3.mla.value import MlaValue
+
 from ..verify_binding import VerifyStepView
-from ..verify_spec import BuiltK31Verify
 from ..verify_contract import served_request_batches, verify_keys
+from ..verify_spec import BuiltK31Verify
 from .indexer import IndexProjection, IndexWeights
 from .mla import CpSparseMla, SparseMla
 from .scratch import RowScratch, row_buffer
@@ -56,7 +63,11 @@ def _direct_query_state(group, device):
     ):
         raise RuntimeError("K31MK_DSA_DIRECT_QAG requires one NVLink clique")
     state = create_state(
-        group.device_group, group.rank_in_group, 64, 128 * 576 // 2, device=device,
+        group.device_group,
+        group.rank_in_group,
+        64,
+        128 * 576 // 2,
+        device=device,
     )
     if state.symm_mem_hdl.multicast_ptr == 0:
         raise RuntimeError("K31MK_DSA_DIRECT_QAG requires multicast symmetric memory")
@@ -68,9 +79,10 @@ def _direct_query_state(group, device):
     return state
 
 
-
 @cache
-def _padded_value(rows, heads, pitch, weight_layout, device, q, latent_heads=16, early=False):
+def _padded_value(
+    rows, heads, pitch, weight_layout, device, q, latent_heads=16, early=False
+):
     """Read the real heads directly from the sparse core's ``latent_heads``-head output
     (16: the padded DCP1 core; ``heads``: the merged DCP rows)."""
     latent = fake((rows, heads, 512), (latent_heads * 512, 512, 1))
@@ -80,7 +92,12 @@ def _padded_value(rows, heads, pitch, weight_layout, device, q, latent_heads=16,
     output = fake((rows, heads * 128))
     with torch.accelerator.device_index(device):
         return cute.compile(
-            MlaValue(heads, rows, q, early_trigger=early), latent, weight, gate, lengths, output,
+            MlaValue(heads, rows, q, early_trigger=early),
+            latent,
+            weight,
+            gate,
+            lengths,
+            output,
             make_fake_stream(),
         )
 
@@ -113,20 +130,34 @@ class SparseVerifyStep(VerifyStepView):
             if self.causal_lengths.shape != (self.row_count,):
                 raise ValueError("sparse verify needs one causal length per query")
             if self.score_contexts.shape != (self.batch_requests, self.query_width):
-                raise ValueError("sparse verify native score needs int32[Breq,Q] contexts")
-            if self.causal_lengths.dtype != torch.int32 or self.score_contexts.dtype != torch.int32:
+                raise ValueError(
+                    "sparse verify native score needs int32[Breq,Q] contexts"
+                )
+            if (
+                self.causal_lengths.dtype != torch.int32
+                or self.score_contexts.dtype != torch.int32
+            ):
                 raise ValueError("sparse verify causal lengths/contexts must be int32")
             if self.score_schedule is None or self.topk_plan is None:
                 raise ValueError("sparse verify requires current schedule/top-k plan")
             if self.dcp_size > 1:
-                if self.local_contexts is None or self.local_contexts.shape != (
-                    self.batch_requests, self.query_width
-                ) or self.local_contexts.dtype != torch.int32:
-                    raise ValueError("DCP sparse verify needs int32[Breq,Q] local contexts")
-                if self.local_slots is None or self.local_slots.shape != (self.row_count,):
+                if (
+                    self.local_contexts is None
+                    or self.local_contexts.shape
+                    != (self.batch_requests, self.query_width)
+                    or self.local_contexts.dtype != torch.int32
+                ):
+                    raise ValueError(
+                        "DCP sparse verify needs int32[Breq,Q] local contexts"
+                    )
+                if self.local_slots is None or self.local_slots.shape != (
+                    self.row_count,
+                ):
                     raise ValueError("DCP sparse verify needs one local slot per row")
                 if self.split:
-                    raise ValueError("the context-split indexer needs the replicated index-K cache (no DCP)")
+                    raise ValueError(
+                        "the context-split indexer needs the replicated index-K cache (no DCP)"
+                    )
         elif self.split:
             raise ValueError("the context-split indexer runs only in sparse verify")
 
@@ -179,7 +210,10 @@ def dcp_layout():
     parallel = get_parallel()
     try:
         return parallel.attn_dcp_size, parallel.attn_dcp_rank
-    except (RuntimeError, ValueError):  # no parallel config published (model-free tests): no DCP
+    except (
+        RuntimeError,
+        ValueError,
+    ):  # no parallel config published (model-free tests): no DCP
         return 1, 0
 
 
@@ -193,9 +227,13 @@ def dcp_store_args():
 class VerifySelection:
     def __init__(self, device, rows, split=None, *, scratch=None):
         if VERIFY_TOPK not in ("v2", "rank"):
-            raise ValueError(f"K31MK_VERIFY_TOPK must be v2 or rank, got {VERIFY_TOPK!r}")
+            raise ValueError(
+                f"K31MK_VERIFY_TOPK must be v2 or rank, got {VERIFY_TOPK!r}"
+            )
         self.rows = rows
-        self.selected = row_buffer(scratch, "selection.selected", rows, (2048,), torch.int32, device)
+        self.selected = row_buffer(
+            scratch, "selection.selected", rows, (2048,), torch.int32, device
+        )
         self.row_tables = {}
         # (dsa.split.LocalIndexer, 16-rank merge), shared by the layers; None keeps the replicated selection
         self.split = split
@@ -217,20 +255,31 @@ class VerifySelection:
         event the cross-rank selection waits for after the scoring is enqueued (K31MK_DSA_EARLY_QAG: the query
         all-gather on main), so every rank issues its DCP collectives in the same order."""
         import deep_gemm
-        from sglang.kernels.ops.attention.dsa.paged_mqa_logits import _restore_row_stride
+        from sglang.kernels.ops.attention.dsa.paged_mqa_logits import (
+            _restore_row_stride,
+        )
 
         if self.split is not None and step.split:
             local, merge = self.split
             candidates = local.run(query, gates, cache, table, step)
-            return merge.run(candidates, step.causal_lengths, self.row_table(table, step.query_width),
-                             self.selected)
+            return merge.run(
+                candidates,
+                step.causal_lengths,
+                self.row_table(table, step.query_width),
+                self.selected,
+            )
 
         contexts = step.score_contexts if step.dcp_size == 1 else step.local_contexts
         score_fn = deep_gemm.fp8_paged_mqa_logits
         scores = score_fn(
-            query.view(step.batch_requests, step.query_width, 32, 128), cache.view(-1, 64, 1, 132),
-            gates.squeeze(-1), contexts, table, step.score_schedule,
-            table.shape[1] * 64, clean_logits=False,
+            query.view(step.batch_requests, step.query_width, 32, 128),
+            cache.view(-1, 64, 1, 132),
+            gates.squeeze(-1),
+            contexts,
+            table,
+            step.score_schedule,
+            table.shape[1] * 64,
+            clean_logits=False,
         )
         scores = _restore_row_stride(scores)
         if scored is not None:
@@ -246,14 +295,23 @@ class VerifySelection:
 
             # Top-k accepts an arbitrary row stride, including a shared row (0).
             return select_rank_topk(
-                scores, step.causal_lengths, table, self.selected, step.topk_plan,
+                scores,
+                step.causal_lengths,
+                table,
+                self.selected,
+                step.topk_plan,
                 queries_per_request=step.query_width,
             )
         from sglang.kernels.ops.attention.dsv4.topk import topk_transform_paged_v2
 
         topk_transform_paged_v2(
-            scores, step.causal_lengths, self.row_table(table, step.query_width), self.selected, 64,
-            step.topk_plan, deterministic=False,
+            scores,
+            step.causal_lengths,
+            self.row_table(table, step.query_width),
+            self.selected,
+            64,
+            step.topk_plan,
+            deterministic=False,
         )
         return self.selected
 
@@ -268,8 +326,13 @@ class VerifySelection:
         )
 
         slots = dcp_global_topk(
-            scores, step.local_contexts.view(-1), step.causal_lengths,
-            self.row_table(table, step.query_width), 2048, 64, step.topk_plan,
+            scores,
+            step.local_contexts.view(-1),
+            step.causal_lengths,
+            self.row_table(table, step.query_width),
+            2048,
+            64,
+            step.topk_plan,
         )
         return dcp_localize_compact(slots)
 
@@ -284,9 +347,15 @@ class PreparedSparseVerifyMla:
             self.index_projection = FusedIndexQuery(weights, rows)
         else:
             self.index_projection = IndexProjection(weights, rows, scratch=scratch)
-        self.hidden = None  # the layer input; set by the index-K writer for the fused query
-        self.selection = VerifySelection(base.device, rows, split=split, scratch=scratch)
-        self.mla = SparseMla(base.device, max_context, rows, heads=base.heads, scratch=scratch)
+        self.hidden = (
+            None  # the layer input; set by the index-K writer for the fused query
+        )
+        self.selection = VerifySelection(
+            base.device, rows, split=split, scratch=scratch
+        )
+        self.mla = SparseMla(
+            base.device, max_context, rows, heads=base.heads, scratch=scratch
+        )
         self.index_stream = _index_stream(base.device)
         self.gate_stream = _gate_stream(base.device)
         self.packed_index_gate = False
@@ -294,7 +363,9 @@ class PreparedSparseVerifyMla:
         # K31MK_DSA_WRITER_STREAM: the packed writer's GEMM (gate stream) writes the gate the index query reads;
         # recorded right after it, waited before that query (P8).
         self._gate_ready = torch.cuda.Event()
-        self._q_gathered = torch.cuda.Event()  # K31MK_DSA_EARLY_QAG: the query all-gather (and its copies) done
+        self._q_gathered = (
+            torch.cuda.Event()
+        )  # K31MK_DSA_EARLY_QAG: the query all-gather (and its copies) done
         self.sparse_values = {}
         self.index_cache = None
         self.step = None
@@ -305,16 +376,32 @@ class PreparedSparseVerifyMla:
         self.cp_mla = None
         self.direct_qag = None
         if self.dcp_size > 1:
-            self.cp_mla = CpSparseMla(base.device, max_context, rows, heads=self.dcp_size * base.heads,
-                                      scratch=scratch)
+            self.cp_mla = CpSparseMla(
+                base.device,
+                max_context,
+                rows,
+                heads=self.dcp_size * base.heads,
+                scratch=scratch,
+            )
             if DSA_DIRECT_QAG:
                 if self.dcp_size != 8 or base.heads != 12 or not 0 < rows <= 64:
-                    raise ValueError("K31MK_DSA_DIRECT_QAG requires DCP8, 12 local heads and <=64 rows")
-                self.direct_qag = _direct_query_state(get_parallel().dcp_group, base.device)
+                    raise ValueError(
+                        "K31MK_DSA_DIRECT_QAG requires DCP8, 12 local heads and <=64 rows"
+                    )
+                self.direct_qag = _direct_query_state(
+                    get_parallel().dcp_group, base.device
+                )
                 # Bind the full padded buffer before capture, not the 96-head
                 # slice returned by all_gather_inner. No copy or rebind at run time.
-                self.cp_mla.query = self.direct_qag.comm_buff[:rows].view(torch.float8_e4m3fn).view(
-                    rows, 1, 128, 576,
+                self.cp_mla.query = (
+                    self.direct_qag.comm_buff[:rows]
+                    .view(torch.float8_e4m3fn)
+                    .view(
+                        rows,
+                        1,
+                        128,
+                        576,
+                    )
                 )
         self.cp_values = {}
         self.cp_latent = None
@@ -330,8 +417,10 @@ class PreparedSparseVerifyMla:
         mq(*query_args, s)
         if not _MLAQ_AFTER_LOGGED:  # use-time, once per process
             _MLAQ_AFTER_LOGGED.append(True)
-            logger.info("NVIDIA megakernel: K31MK_MLAQ_AFTER_SCORING engaged (the MLA query waits for the indexer "
-                        "scoring and runs beside the top-k; DCP1 sparse verify)")
+            logger.info(
+                "NVIDIA megakernel: K31MK_MLAQ_AFTER_SCORING engaged (the MLA query waits for the indexer "
+                "scoring and runs beside the top-k; DCP1 sparse verify)"
+            )
 
     @property
     def latent(self):
@@ -348,16 +437,31 @@ class PreparedSparseVerifyMla:
             if rows != self.selection.rows:
                 continue
             self.sparse_values[rows, q] = _padded_value(
-                rows, self.base.heads, self.base.pitches[rows], layout(self.base.weights[4]),
-                self.base.device.index, q, early=VALUE_EARLY_TRIGGER,
+                rows,
+                self.base.heads,
+                self.base.pitches[rows],
+                layout(self.base.weights[4]),
+                self.base.device.index,
+                q,
+                early=VALUE_EARLY_TRIGGER,
             )
-            if VALUE_EARLY_TRIGGER and not _VALUE_TRIGGER_LOGGED:  # once per process, not per layer
+            if (
+                VALUE_EARLY_TRIGGER and not _VALUE_TRIGGER_LOGGED
+            ):  # once per process, not per layer
                 _VALUE_TRIGGER_LOGGED.append(True)
-                logger.info("NVIDIA megakernel: sparse verify MlaValue releases the o-proj at entry (opt-in)")
+                logger.info(
+                    "NVIDIA megakernel: sparse verify MlaValue releases the o-proj at entry (opt-in)"
+                )
             if self.cp_mla is not None:  # the merged rows hold this rank's heads only
                 self.cp_values[rows, q] = _padded_value(
-                    rows, self.base.heads, self.base.pitches[rows], layout(self.base.weights[4]),
-                    self.base.device.index, q, latent_heads=self.base.heads, early=VALUE_EARLY_TRIGGER,
+                    rows,
+                    self.base.heads,
+                    self.base.pitches[rows],
+                    layout(self.base.weights[4]),
+                    self.base.device.index,
+                    q,
+                    latent_heads=self.base.heads,
+                    early=VALUE_EARLY_TRIGGER,
                 )
         return self
 
@@ -369,8 +473,10 @@ class PreparedSparseVerifyMla:
             return False
         if not _EARLY_QAG_LOGGED:  # use-time, once per process
             _EARLY_QAG_LOGGED.append(True)
-            logger.info("NVIDIA megakernel: K31MK_DSA_EARLY_QAG engaged (DCP sparse verify gathers the query on the "
-                        "main stream after the MLA query; the selection merge waits for it)")
+            logger.info(
+                "NVIDIA megakernel: K31MK_DSA_EARLY_QAG engaged (DCP sparse verify gathers the query on the "
+                "main stream after the MLA query; the selection merge waits for it)"
+            )
         return True
 
     def gather_query(self, query, rows):
@@ -379,24 +485,35 @@ class PreparedSparseVerifyMla:
         heads = self.dcp_size * self.base.heads
         if self.direct_qag is not None:
             all_gather_inner(
-                self.direct_qag, query.view(torch.bfloat16).view(rows, self.base.heads * 576 // 2),
-                tp_hidden_dim=heads * 576 // 2, skip_entry_sync=False, safe=False,
+                self.direct_qag,
+                query.view(torch.bfloat16).view(rows, self.base.heads * 576 // 2),
+                tp_hidden_dim=heads * 576 // 2,
+                skip_entry_sync=False,
+                safe=False,
             )
             if not _DIRECT_QAG_LOGGED:
                 _DIRECT_QAG_LOGGED.append(True)
-                logger.info("NVIDIA megakernel: K31MK_DSA_DIRECT_QAG engaged (DCP8 direct FP8 query "
-                            "multicast into 128-head layout; entry and exit barriers retained)")
+                logger.info(
+                    "NVIDIA megakernel: K31MK_DSA_DIRECT_QAG engaged (DCP8 direct FP8 query "
+                    "multicast into 128-head layout; entry and exit barriers retained)"
+                )
             return
         own = query.view(torch.uint8).view(rows, self.base.heads * 576)
         gathered = get_parallel().dcp_group.all_gather(own, dim=-1)
-        self.cp_mla.query.view(torch.uint8)[:, 0, :heads].copy_(gathered.view(rows, heads, 576))
+        self.cp_mla.query.view(torch.uint8)[:, 0, :heads].copy_(
+            gathered.view(rows, heads, 576)
+        )
 
     def _trt_reducer(self, rows, q):
         parallel = get_parallel()
         return (
-            DSA_TRT_REDUCER and rows in (15, 20, 25, 30) and q == 5
-            and self.dcp_size == 8 and parallel.tp_size == 8
-            and self.base.heads == 12 and parallel.dcp_comm_backend == "fi_a2a"
+            DSA_TRT_REDUCER
+            and rows in (15, 20, 25, 30)
+            and q == 5
+            and self.dcp_size == 8
+            and parallel.tp_size == 8
+            and self.base.heads == 12
+            and parallel.dcp_comm_backend == "fi_a2a"
         )
 
     def merge_heads(self, out, lse):
@@ -409,7 +526,10 @@ class PreparedSparseVerifyMla:
         # The server's --dcp-comm-backend, as stock MLA: fi_a2a's MNNVL workspace is
         # allocated before capture only when that backend is selected.
         return dcp_a2a_lse_reduce(
-            out[:, 0, :heads], lse[:, :heads], parallel.dcp_group, is_lse_base_on_e=False,
+            out[:, 0, :heads],
+            lse[:, :heads],
+            parallel.dcp_group,
+            is_lse_base_on_e=False,
             comm_backend=parallel.dcp_comm_backend,
         )
 
@@ -417,23 +537,45 @@ class PreparedSparseVerifyMla:
         if self.step is not None and self.step.sparse and not self.fused_index:
             self.index_projection.prepare_gate(hidden)
 
-    def run(self, projected, out, *, cache, slots, block_table, lengths, totals=None, q=1):
+    def run(
+        self, projected, out, *, cache, slots, block_table, lengths, totals=None, q=1
+    ):
         step = self.step
         if step is None or not step.sparse:
-            return self.base.run(projected, out, cache=cache, slots=slots,
-                                 block_table=block_table, lengths=lengths, totals=totals, q=q)
+            return self.base.run(
+                projected,
+                out,
+                cache=cache,
+                slots=slots,
+                block_table=block_table,
+                lengths=lengths,
+                totals=totals,
+                q=q,
+            )
         b = self.base
         rows = projected.shape[0]
         mq, _, query, _ = b.kernels[rows, q]
         qnorm, kvnorm, qb, uk, uv, qinv, kinv = b.views
         dcp = step.dcp_size > 1
         if dcp and step.dcp_size != self.dcp_size:
-            raise RuntimeError(f"DCP sparse verify built for {self.dcp_size} ranks, step has {step.dcp_size}")
+            raise RuntimeError(
+                f"DCP sparse verify built for {self.dcp_size} ranks, step has {step.dcp_size}"
+            )
         # Under DCP the latent row of a written token lives on its owning rank only.
         write_slots = step.local_slots if dcp else slots
-        args = (to_cute(projected[:, :2112]), qnorm, kvnorm, qb, uk,
-                to_cute(cache.view(torch.uint8)), to_cute(write_slots, 8),
-                qinv, kinv, b.eps, query)
+        args = (
+            to_cute(projected[:, :2112]),
+            qnorm,
+            kvnorm,
+            qb,
+            uk,
+            to_cute(cache.view(torch.uint8)),
+            to_cute(write_slots, 8),
+            qinv,
+            kinv,
+            b.eps,
+            query,
+        )
         s = stream(b.device)
         main = torch.cuda.current_stream(b.device)
         # The index-K/gate writer is already running on this stream. Wait only
@@ -447,7 +589,11 @@ class PreparedSparseVerifyMla:
         else:
             self.index_stream.wait_stream(self.gate_stream)
         # DCP and the context-split indexer keep today's order (their collectives and gathers are untouched).
-        after = MLAQ_AFTER_SCORING and not dcp and not (self.selection.split is not None and step.split)
+        after = (
+            MLAQ_AFTER_SCORING
+            and not dcp
+            and not (self.selection.split is not None and step.split)
+        )
         if not after:
             mq(*args, *b.query_views, s)
         early = dcp and self.early_gather(rows)
@@ -460,11 +606,19 @@ class PreparedSparseVerifyMla:
                 iq, gates = self.index_projection.run(self.hidden, projected)
             else:
                 iq, gates = self.index_projection.project_query(projected)
-            if self.writer_on_gate_stream:  # the logits read the index-K the writer stored
+            if (
+                self.writer_on_gate_stream
+            ):  # the logits read the index-K the writer stored
                 self.index_stream.wait_stream(self.gate_stream)
-            selected = self.selection.run(iq, gates, self.index_cache, block_table, step,
-                                          scored=self._scored if after else None,
-                                          collective_after=self._q_gathered if early else None)
+            selected = self.selection.run(
+                iq,
+                gates,
+                self.index_cache,
+                block_table,
+                step,
+                scored=self._scored if after else None,
+                collective_after=self._q_gathered if early else None,
+            )
             if dcp and not early:
                 # After the selection's candidate gather on this stream: one DCP-group
                 # collective at a time (no concurrent NCCL fallbacks on the group).
@@ -479,7 +633,10 @@ class PreparedSparseVerifyMla:
         if dcp:
             local_rows, counts = selected
             partial, lse = self.cp_mla.run_core(
-                cache, local_rows, counts, b.stock_scales,
+                cache,
+                local_rows,
+                counts,
+                b.stock_scales,
                 trt_reducer=self._trt_reducer(rows, q),
             )
             self.cp_latent = latent = self.merge_heads(partial, lse)
@@ -488,9 +645,14 @@ class PreparedSparseVerifyMla:
             self.mla.run_core(cache, selected, step.causal_lengths, b.stock_scales)
             latent = self.mla.output[:, 0, : b.heads]
             value = self.sparse_values[rows, q]
-        value(to_cute(latent), uv,
-              to_cute(projected[:, 2112 : 2112 + b.heads * 128]),
-              to_cute(lengths, 4), to_cute(out), s)
+        value(
+            to_cute(latent),
+            uv,
+            to_cute(projected[:, 2112 : 2112 + b.heads * 128]),
+            to_cute(lengths, 4),
+            to_cute(out),
+            s,
+        )
         return out
 
 
@@ -506,13 +668,19 @@ class SparseVerifyIndexKey:
             self.projected = torch.empty(
                 (8, 160), device=self.packed_weight.device, dtype=torch.bfloat16
             )
-            if not core.fused_index:  # the fused query computes its gate from the layer input
+            if (
+                not core.fused_index
+            ):  # the fused query computes its gate from the layer input
                 core.index_projection.gate = self.projected[:, 128:160]
             core.packed_index_gate = True
             core.writer_on_gate_stream = DSA_WRITER_STREAM
-            if DSA_WRITER_STREAM and not _WRITER_STREAM_LOGGED:  # once per process, not per layer
+            if (
+                DSA_WRITER_STREAM and not _WRITER_STREAM_LOGGED
+            ):  # once per process, not per layer
                 _WRITER_STREAM_LOGGED.append(True)
-                logger.info("NVIDIA megakernel: sparse verify index-K writer on the gate stream (opt-in)")
+                logger.info(
+                    "NVIDIA megakernel: sparse verify index-K writer on the gate stream (opt-in)"
+                )
 
     def bind(self, cache, page_size, rows=(8,)):
         self.core.index_cache = cache
@@ -535,18 +703,24 @@ class SparseVerifyIndexKey:
             )
 
             writer = side
-            if self.core.writer_on_gate_stream:  # the index query need not wait for this writer
+            if (
+                self.core.writer_on_gate_stream
+            ):  # the index query need not wait for this writer
                 gate.wait_stream(main)
                 writer = gate
             with torch.cuda.stream(writer):
                 torch.mm(hidden, self.packed_weight.T, out=self.projected)
-                if self.core.writer_on_gate_stream:  # the packed gate (projected[:, 128:160]) the query reads
+                if (
+                    self.core.writer_on_gate_stream
+                ):  # the packed gate (projected[:, 128:160]) the query reads
                     self.core._gate_ready.record()
                 w = self.base.weights
                 # LayerNorm supports this padded row stride; its output is
                 # contiguous, so the stock cache writer needs no input copy.
                 key = layernorm(self.projected[:, :128], w.norm, w.bias, w.eps)
-                fused_store_index_k_cache(key, self.base.cache, slots, 64, *dcp_store_args())
+                fused_store_index_k_cache(
+                    key, self.base.cache, slots, 64, *dcp_store_args()
+                )
             return
         gate.wait_stream(main)
         with torch.cuda.stream(side):
@@ -564,7 +738,9 @@ class MultiSparseVerifyMla:
         # The widths replay one at a time: one set of widest-width buffers serves them all.
         scratch = RowScratch(base.device, max(widths))
         self.profiles = {
-            rows: PreparedSparseVerifyMla(base, weights, rows, max_context, split.get(rows), scratch=scratch)
+            rows: PreparedSparseVerifyMla(
+                base, weights, rows, max_context, split.get(rows), scratch=scratch
+            )
             for rows in widths
         }
         self.active = self.profiles[min(self.profiles)]
@@ -627,10 +803,15 @@ class BuiltSparseVerify(BuiltK31Verify):
             attention = self.resources.attention[record.layer_id]
             if self.split is None:
                 self.split_device = attention.core.device
-                self.split = self._build_split(self.split_device, weights.context_length)
+                self.split = self._build_split(
+                    self.split_device, weights.context_length
+                )
             core = MultiSparseVerifyMla(
-                attention.core, IndexWeights(a[10], a[11], a[1], sc[0]),
-                self.widths, weights.context_length, self.split,
+                attention.core,
+                IndexWeights(a[10], a[11], a[1], sc[0]),
+                self.widths,
+                weights.context_length,
+                self.split,
             )
             attention.core = core
             self.sparse_cores[record.layer_id] = core
@@ -647,15 +828,22 @@ class BuiltSparseVerify(BuiltK31Verify):
         if not SPLIT_MIN:
             return {}
         if context_length < SPLIT_MIN:  # no forward reaches it
-            logger.info("NVIDIA megakernel: sparse verify context split off: context length %d < %d",
-                        context_length, SPLIT_MIN)
+            logger.info(
+                "NVIDIA megakernel: sparse verify context split off: context length %d < %d",
+                context_length,
+                SPLIT_MIN,
+            )
             return {}
         explicit = "K31MK_INDEX_SPLIT_MIN" in os.environ
         if dcp_layout()[0] > 1:
             if explicit:
-                raise RuntimeError("K31MK_INDEX_SPLIT_MIN needs the replicated index-K cache; it is set under DCP")
-            logger.info("NVIDIA megakernel: sparse verify context split off: DCP (it scores the replicated "
-                        "index-K cache)")
+                raise RuntimeError(
+                    "K31MK_INDEX_SPLIT_MIN needs the replicated index-K cache; it is set under DCP"
+                )
+            logger.info(
+                "NVIDIA megakernel: sparse verify context split off: DCP (it scores the replicated "
+                "index-K cache)"
+            )
             return {}
         from sglang.srt.distributed.parallel_state import get_tp_group
 
@@ -663,19 +851,40 @@ class BuiltSparseVerify(BuiltK31Verify):
         merge = SplitMerge(group, max(self.widths))
         if not merge.usable(max(self.widths)):
             if explicit:  # the arm must not run the replicated path unnoticed
-                raise RuntimeError("K31MK_INDEX_SPLIT_MIN is set but the 16-rank DCP top-k merge is unavailable")
-            logger.info("NVIDIA megakernel: sparse verify context split off: the 16-rank DCP top-k merge is "
-                        "unavailable (TP %d)", group.world_size)
+                raise RuntimeError(
+                    "K31MK_INDEX_SPLIT_MIN is set but the 16-rank DCP top-k merge is unavailable"
+                )
+            logger.info(
+                "NVIDIA megakernel: sparse verify context split off: the 16-rank DCP top-k merge is "
+                "unavailable (TP %d)",
+                group.world_size,
+            )
             return {}
         max_pages = -(-context_length // 64)
-        logger.info("NVIDIA megakernel: sparse verify context split armed: ctx >= %d, world %d, rows %s",
-                    SPLIT_MIN, group.world_size, self.widths)
+        logger.info(
+            "NVIDIA megakernel: sparse verify context split armed: ctx >= %d, world %d, rows %s",
+            SPLIT_MIN,
+            group.world_size,
+            self.widths,
+        )
         if COARSE_BITS != 10:
-            logger.info("NVIDIA megakernel: sparse verify context split candidates coarse bins %d bits "
-                        "(K31MK_INDEX_SPLIT_COARSE_BITS)", COARSE_BITS)
+            logger.info(
+                "NVIDIA megakernel: sparse verify context split candidates coarse bins %d bits "
+                "(K31MK_INDEX_SPLIT_COARSE_BITS)",
+                COARSE_BITS,
+            )
         return {
-            rows: (LocalIndexer(device, requests=rows // self.query_width, query_width=self.query_width,
-                                max_pages=max_pages, world=group.world_size, rank=group.rank_in_group), merge)
+            rows: (
+                LocalIndexer(
+                    device,
+                    requests=rows // self.query_width,
+                    query_width=self.query_width,
+                    max_pages=max_pages,
+                    world=group.world_size,
+                    rank=group.rank_in_group,
+                ),
+                merge,
+            )
             for rows in self.widths
         }
 
@@ -703,14 +912,21 @@ class BuiltSparseVerify(BuiltK31Verify):
             self._prepare_split(view)
         result = super().run_verify(embeddings, view)
         key = (view.batch_requests, view.query_width)
-        fused = view.sparse and any(c.active.fused_index for c in self.sparse_cores.values())
+        fused = view.sparse and any(
+            c.active.fused_index for c in self.sparse_cores.values()
+        )
         if fused and key not in self._fused_logged:  # engagement tag for A/B runs
-            logger.info("NVIDIA megakernel: sparse verify index query FusedIndexQuery Breq=%d Q=%d", *key)
+            logger.info(
+                "NVIDIA megakernel: sparse verify index query FusedIndexQuery Breq=%d Q=%d",
+                *key,
+            )
             self._fused_logged.add(key)
         if view.sparse and view.dcp_size > 1 and key not in self._dcp_logged:
             logger.info(
                 "NVIDIA megakernel: sparse verify under DCP%d (rank %d): CP sparse core + LSE merge Breq=%d Q=%d",
-                view.dcp_size, view.dcp_rank, *key,
+                view.dcp_size,
+                view.dcp_rank,
+                *key,
             )
             self._dcp_logged.add(key)
         return result

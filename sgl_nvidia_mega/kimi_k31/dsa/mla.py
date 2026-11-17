@@ -29,9 +29,18 @@ class SparseMla:
         self.rows, self.heads = rows, heads
         self.workspace, self.counter = _workspace(device)
         # zero: the core runs 16 heads and only the real ones are written
-        self.query = row_buffer(scratch, "sparse_mla.query", rows, (1, 16, 576), torch.float8_e4m3fn,
-                                device, zero=True)
-        self.output = row_buffer(scratch, "sparse_mla.output", rows, (1, 16, 512), torch.bfloat16, device)
+        self.query = row_buffer(
+            scratch,
+            "sparse_mla.query",
+            rows,
+            (1, 16, 576),
+            torch.float8_e4m3fn,
+            device,
+            zero=True,
+        )
+        self.output = row_buffer(
+            scratch, "sparse_mla.output", rows, (1, 16, 512), torch.bfloat16, device
+        )
 
     def run(self, query, cache, selected, lengths, scales, out):
         self.prepare_query(query)
@@ -40,7 +49,9 @@ class SparseMla:
         return out
 
     def prepare_query(self, query):
-        self.query[:, :, : self.heads].copy_(query.view(torch.float8_e4m3fn).view(self.rows, 1, self.heads, 576))
+        self.query[:, :, : self.heads].copy_(
+            query.view(torch.float8_e4m3fn).view(self.rows, 1, self.heads, 576)
+        )
 
     def run_core(self, cache, selected, lengths, scales):
         from flashinfer.decode import trtllm_batch_decode_with_kv_cache_mla
@@ -98,11 +109,20 @@ class CpSparseMla:
         if heads > 128:
             raise ValueError(f"DCP sparse MLA pads to 128 heads, got {heads}")
         if rows > trtllm_rows_per_call(workspace_bytes=_CP_WORKSPACE_BYTES, heads=128):
-            raise ValueError(f"DCP sparse MLA workspace runs at most {_CP_MAX_ROWS} rows per launch")
+            raise ValueError(
+                f"DCP sparse MLA workspace runs at most {_CP_MAX_ROWS} rows per launch"
+            )
         self.max_context, self.rows, self.heads = max_context, rows, heads
         self.workspace, self.counter = _cp_workspace(device)
-        self.query = row_buffer(scratch, "cp_sparse_mla.query", rows, (1, 128, 576), torch.float8_e4m3fn,
-                                device, zero=True)
+        self.query = row_buffer(
+            scratch,
+            "cp_sparse_mla.query",
+            rows,
+            (1, 128, 576),
+            torch.float8_e4m3fn,
+            device,
+            zero=True,
+        )
         self.query_starts = torch.arange(rows + 1, dtype=torch.int32, device=device)
 
     def run_core(self, cache, local_rows, counts, scales, *, trt_reducer=False):

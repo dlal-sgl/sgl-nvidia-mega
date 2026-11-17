@@ -19,7 +19,6 @@ from ..common.host import fake, layout, stream, to_cute
 from .kernel import KdaSplit
 from .prepared import decode_conv_weight
 
-
 # VR200 (SM107) verify schedules (early, lanes per state row, minimum CTAs per SM, CTAs
 # per head) by (requests, queries), from an SM107 sweep (cold L2, same gates): Breq4 Q8 is
 # faster on 4-CTA clusters (192 CTAs, one wave on 212 SMs); GB300's 8-CTA clusters stay best
@@ -30,8 +29,13 @@ SM107_VERIFY: dict = {(4, 8): (0, 8, 2, 4)}
 # Not bitwise vs the default schedule. ``K31MK_KDA_SM103_TP8=0`` keeps the default.
 SM103_TP8_HEADS = 12
 SM103_TP8_VERIFY: dict = {
-    (2, 8): (0, 8, 2, 4), (3, 8): (0, 8, 2, 4), (4, 8): (0, 8, 2, 4), (5, 8): (0, 8, 2, 4),
-    (6, 8): (0, 8, 4, 4), (7, 8): (0, 8, 3, 4), (8, 8): (0, 8, 3, 4),
+    (2, 8): (0, 8, 2, 4),
+    (3, 8): (0, 8, 2, 4),
+    (4, 8): (0, 8, 2, 4),
+    (5, 8): (0, 8, 2, 4),
+    (6, 8): (0, 8, 4, 4),
+    (7, 8): (0, 8, 3, 4),
+    (8, 8): (0, 8, 3, 4),
 }
 
 
@@ -50,7 +54,9 @@ def verify_schedule(requests, queries, device, heads=None):
     if sm103_tp8 and capability == (10, 3) and heads == SM103_TP8_HEADS:
         # Experimental Q5/R3 point: preserve ReplaySSM dependency and arithmetic
         # contracts while reusing the established four-CTA layout. Default off.
-        if (requests, queries) == (3, 5) and os.environ.get("K31MK_KDA_Q5_R3_C4", "0") == "1":
+        if (requests, queries) == (3, 5) and os.environ.get(
+            "K31MK_KDA_Q5_R3_C4", "0"
+        ) == "1":
             return (0, 8, 2, 4)
         tactic = SM103_TP8_VERIFY.get((requests, queries))
         if tactic is not None:

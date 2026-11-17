@@ -305,7 +305,8 @@ class KdaSplit:
 
                 if cutlass.const_expr(self.owned_tokens):
                     betas, gates, inputs = self.owned_prologue(
-                        args, (token, slot, scratch_row, partition, head, thread, lane),
+                        args,
+                        (token, slot, scratch_row, partition, head, thread, lane),
                         (taps, coeff, dim, qk_channel, value_channel, value_base),
                         (shared_q, shared_k, shared_v, reductions, qk_barrier),
                     )

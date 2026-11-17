@@ -66,7 +66,10 @@ def log_fold(batch):
     published / WaveMoeTail batch, e.g. under K31MK_TP16_B8_WAVE, never logs)."""
     if batch not in _TAIL_FOLD_LOGGED:  # once per process and batch, not per layer
         _TAIL_FOLD_LOGGED.append(batch)
-        logger.info("NVIDIA megakernel: MoE tail RMS folded into the up projection (F1, not bitwise) B%d", batch)
+        logger.info(
+            "NVIDIA megakernel: MoE tail RMS folded into the up projection (F1, not bitwise) B%d",
+            batch,
+        )
 
 
 def published(tp, batch):
@@ -168,7 +171,9 @@ def compile_tail(
         kernel = wave = WaveMoeTail(batch, tp, twoshot, early, umma, deadline_ns)
         scalars += (vec(3 * CAP * 3584),) if wave.reduce else ()
     else:
-        kernel = MoeTail(tp, batch, mode=mode, trigger=trigger, deadline_ns=deadline_ns, fold=fold)
+        kernel = MoeTail(
+            tp, batch, mode=mode, trigger=trigger, deadline_ns=deadline_ns, fold=fold
+        )
     options = "" if m8 else "--ptxas-options=--maxrregcount=120"
     with torch.accelerator.device_index(device):
         args = (*tensors, *scalars, make_fake_stream())
@@ -282,7 +287,9 @@ class PreparedTail:
         self.tail_box, ordinal, count = placement
         eps = op.contract.rms_eps
         m8 = [b for b in batches if published(tp, b)]
-        if tp == 16 and 8 in m8 and not _TP16_B8_WAVE_LOGGED:  # once per process, not per layer
+        if (
+            tp == 16 and 8 in m8 and not _TP16_B8_WAVE_LOGGED
+        ):  # once per process, not per layer
             _TP16_B8_WAVE_LOGGED.append(True)
             logger.info("NVIDIA megakernel: TP16 B8 MoE tail on WaveMoeTail (opt-in)")
         self.twoshots = twoshot_batches(tp) & set(m8)

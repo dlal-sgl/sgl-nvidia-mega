@@ -39,7 +39,13 @@ def run_reducer_mla(owner, cache, local_rows, counts, scales):
         raise ValueError("K31 reducer requires the original page64 KV pool")
     block_tables = local_rows.unsqueeze(1)
     kv_cache = _check_trtllm_gen_mla_shape(
-        query, kv_cache, 512, 64, 2048, block_tables, 64,
+        query,
+        kv_cache,
+        512,
+        64,
+        2048,
+        block_tables,
+        64,
         require_aligned_block_table=False,
     )
     out = torch.empty((rows, 1, 128, 512), dtype=torch.bfloat16, device=query.device)
@@ -48,17 +54,29 @@ def run_reducer_mla(owner, cache, local_rows, counts, scales):
     # log2 on device; scalar conversion remains in the unchanged C++ launcher.
     bmm1_scale = scales[0] * log2e if isinstance(scales[0], torch.Tensor) else scales[0]
     runner = TrtllmGenMlaDecodeRunner(
-        kv_cache=kv_cache, workspace_buffer=owner.workspace,
-        sm_count=get_device_sm_count(query.device), qk_nope_head_dim=128,
-        kv_lora_rank=512, qk_rope_head_dim=64, max_seq_len=owner.max_context,
-        sparse_mla_top_k=2048, bmm1_scale=bmm1_scale, bmm2_scale=scales[1],
-        sinks=None, skip_softmax_threshold_scale_factor=None, enable_pdl=True,
-        is_var_seq=True, uses_shared_paged_kv_idx=True, return_lse=True,
-        lse=lse, return_lse_base="base2",
+        kv_cache=kv_cache,
+        workspace_buffer=owner.workspace,
+        sm_count=get_device_sm_count(query.device),
+        qk_nope_head_dim=128,
+        kv_lora_rank=512,
+        qk_rope_head_dim=64,
+        max_seq_len=owner.max_context,
+        sparse_mla_top_k=2048,
+        bmm1_scale=bmm1_scale,
+        bmm2_scale=scales[1],
+        sinks=None,
+        skip_softmax_threshold_scale_factor=None,
+        enable_pdl=True,
+        is_var_seq=True,
+        uses_shared_paged_kv_idx=True,
+        return_lse=True,
+        lse=lse,
+        return_lse_base="base2",
     )
     # A distinct module/compile macro selects the reducer; no global monkeypatch
     # or environment-dependent FlashInfer dispatch can change the stock anchor.
     runner._run = _module().trtllm_paged_attention_decode
-    runner.forward([query, block_tables, counts, out],
-                   multi_ctas_kv_counter_buffer=owner.counter)
+    runner.forward(
+        [query, block_tables, counts, out], multi_ctas_kv_counter_buffer=owner.counter
+    )
     return out, lse

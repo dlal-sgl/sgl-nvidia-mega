@@ -49,13 +49,17 @@ from ..k3.common.primitives import (
 from ..k3.gemm.projection import PreparedProjection
 from .tactics import draft_tactic
 
-TOPK = 16  # the default selector top_k; RankTopK / SelectorWalk take ``topk`` (16 or 32)
+TOPK = (
+    16  # the default selector top_k; RankTopK / SelectorWalk take ``topk`` (16 or 32)
+)
 TOPKS = (16, 32)
 SELECTOR_RANK = 256
 PARTS = 8  # CTAs (one cluster) per row
 EMPTY = -0x80000000  # signed ordered key below every value (incl. -inf)
 NO_ID = 0x7FFFFFFF
 BITONIC = best_default("K31MK_RANKTOPK_BITONIC", "1", "0") == "1"
+
+
 @cute.jit
 def ordered(bits):
     """Signed order-preserving key of FP32 ``bits`` (Int32; -0.0 already +0.0): signed
@@ -119,15 +123,22 @@ def lane_merge(key, gid, other_key, other_gid, lane):
 
 
 @cute.jit
-def lane_merge_all(keys, gids, lane, count: cutlass.Constexpr[int], real: cutlass.Constexpr[int]):
+def lane_merge_all(
+    keys, gids, lane, count: cutlass.Constexpr[int], real: cutlass.Constexpr[int]
+):
     """Merge ``count`` (a power of two) sorted 32-lane lists, Python lists of registers,
     pairwise in place into one; lane l ends with the l-th best. Lists from ``real`` on are
     all EMPTY pads: a merge with one is the identity, so it is not built."""
     for level in cutlass.range_constexpr(count.bit_length() - 1):
         for i in cutlass.range_constexpr(0, count, 2 << level):
             if cutlass.const_expr(i + (1 << level) < real):
-                keys[i], gids[i] = lane_merge(keys[i], gids[i], keys[i + (1 << level)],
-                                              gids[i + (1 << level)], lane)
+                keys[i], gids[i] = lane_merge(
+                    keys[i],
+                    gids[i],
+                    keys[i + (1 << level)],
+                    gids[i + (1 << level)],
+                    lane,
+                )
     return keys[0], gids[0]
 
 
@@ -136,8 +147,12 @@ def lane_pair(key, gid, lane):
     """Lane v (< 16) gets entries 2 v and 2 v + 1 of a lane-distributed list: the
     (key, id, key, id) words of the list's v-th 16 B vector."""
     first = (2 * lane) & 31
-    return (cute.arch.shuffle_sync(key, first), cute.arch.shuffle_sync(gid, first),
-            cute.arch.shuffle_sync(key, first + 1), cute.arch.shuffle_sync(gid, first + 1))
+    return (
+        cute.arch.shuffle_sync(key, first),
+        cute.arch.shuffle_sync(gid, first),
+        cute.arch.shuffle_sync(key, first + 1),
+        cute.arch.shuffle_sync(gid, first + 1),
+    )
 
 
 @cute.jit
@@ -170,7 +185,9 @@ class RankTopK:
 
     def __init__(self, num_org: int, local: bool = False, topk: int = TOPK):
         if num_org % (PARTS * 8 * 32):
-            raise ValueError(f"RankTopK wants num_org % {PARTS * 8 * 32} == 0, got {num_org}")
+            raise ValueError(
+                f"RankTopK wants num_org % {PARTS * 8 * 32} == 0, got {num_org}"
+            )
         if topk not in TOPKS:
             raise ValueError(f"RankTopK serves top_k {TOPKS}, got {topk}")
         self.num_org, self.local, self.topk = num_org, local, topk
@@ -180,8 +197,10 @@ class RankTopK:
         if topk > TOPK and self.threads > 320:
             # K 32 keeps 4 x 32-entry register lists per thread: validated up to 320 threads
             # (TP 8); a wider shard would compile into an unverified register budget.
-            raise ValueError(f"RankTopK top_k {topk} is untested at {self.threads} threads per CTA "
-                             f"(num_org {num_org})")
+            raise ValueError(
+                f"RankTopK top_k {topk} is untested at {self.threads} threads per CTA "
+                f"(num_org {num_org})"
+            )
 
     @cute.jit
     def __call__(self, *args):
@@ -197,23 +216,56 @@ class RankTopK:
         smem = cutlass.utils.SmemAllocator()
         warp_keys = alloc(smem, Int32, (self.warps, topk))
         warp_ids = alloc(smem, Int32, (self.warps, topk))
-        lists = alloc(smem, Int32, (PARTS, 2 * topk))  # CTA 0: every CTA's (key, id) pairs
+        lists = alloc(
+            smem, Int32, (PARTS, 2 * topk)
+        )  # CTA 0: every CTA's (key, id) pairs
         bar = alloc(smem, cutlass.Uint64, 1)
         if (part == 0) & (tid == 0):
             cute.arch.mbarrier_init(bar.iterator, 1)
             cute.arch.mbarrier_init_fence()
-            cute.arch.mbarrier_arrive_and_expect_tx(bar.iterator, (PARTS - 1) * 2 * topk * 4)
+            cute.arch.mbarrier_arrive_and_expect_tx(
+                bar.iterator, (PARTS - 1) * 2 * topk * 4
+            )
         cute.arch.cluster_arrive_relaxed()  # CTA 0's barrier before the peers' pushes
-        common = (head_out, box, mc, rank, vocab_start, warp_keys, warp_ids, lists, bar, part, row,
-                  tid, lane, warp)
+        common = (
+            head_out,
+            box,
+            mc,
+            rank,
+            vocab_start,
+            warp_keys,
+            warp_ids,
+            lists,
+            bar,
+            part,
+            row,
+            tid,
+            lane,
+            warp,
+        )
         if cutlass.const_expr(self.bitonic):
             self.bitonic_merges(*common)
         else:
             self.serial_merges(*common)
 
     @cute.jit
-    def serial_merges(self, head_out, box, mc, rank, vocab_start, warp_keys, warp_ids, lists,
-                      bar, part, row, tid, lane, warp):
+    def serial_merges(
+        self,
+        head_out,
+        box,
+        mc,
+        rank,
+        vocab_start,
+        warp_keys,
+        warp_ids,
+        lists,
+        bar,
+        part,
+        row,
+        tid,
+        lane,
+        warp,
+    ):
         """The K-round warp_merge path (per-thread register top-K lists, then the warp, CTA
         and cluster merges); the default."""
         topk = self.topk
@@ -248,7 +300,9 @@ class RankTopK:
             if lane < self.warps:
                 for r in cutlass.range_constexpr(topk):
                     keys[r], ids[r] = warp_keys[lane, r], warp_ids[lane, r]
-            warp_merge(keys, ids, top_keys, top_ids, topk)  # this CTA's top-topk, in every lane
+            warp_merge(
+                keys, ids, top_keys, top_ids, topk
+            )  # this CTA's top-topk, in every lane
             if lane < topk // 2:  # topk / 2 vectors of (key, id, key, id)
                 for v in cutlass.range_constexpr(topk // 2):
                     if lane == v:
@@ -259,8 +313,12 @@ class RankTopK:
                                 lists[0, 4 * v + k] = pair[k]
                         else:
                             floats = tuple(bits_float(Uint32(w)) for w in pair)
-                            push_float(lists.iterator + part * 2 * topk + 4 * v, floats,
-                                       bar.iterator, 0)
+                            push_float(
+                                lists.iterator + part * 2 * topk + 4 * v,
+                                floats,
+                                bar.iterator,
+                                0,
+                            )
         if part == 0:
             wait_phase_zero_cluster(bar.iterator)
             cute.arch.sync_threads()
@@ -289,8 +347,23 @@ class RankTopK:
                                 multicast_words(mc + Int64(offset) * 4, out)
 
     @cute.jit
-    def bitonic_merges(self, head_out, box, mc, rank, vocab_start, warp_keys, warp_ids, lists,
-                       bar, part, row, tid, lane, warp):
+    def bitonic_merges(
+        self,
+        head_out,
+        box,
+        mc,
+        rank,
+        vocab_start,
+        warp_keys,
+        warp_ids,
+        lists,
+        bar,
+        part,
+        row,
+        tid,
+        lane,
+        warp,
+    ):
         """K31MK_RANKTOPK_BITONIC: the kernel's three merges as lane-distributed bitonic
         networks (warp: 8 sorted 32-lane sequences merged; CTA: the warps' lists; cluster:
         the 8 CTAs' lists); the same pushes, barrier and published words as the K-round
@@ -311,7 +384,9 @@ class RankTopK:
                 key, gid = lane_sort(ordered(bits), Int32(col + 2 * j + half), lane)
                 keys.append(key)
                 gids.append(gid)
-        key, gid = lane_merge_all(keys, gids, lane, 8, 8)  # the warp's top-32, lane l = l-th best
+        key, gid = lane_merge_all(
+            keys, gids, lane, 8, 8
+        )  # the warp's top-32, lane l = l-th best
         if lane < topk:
             warp_keys[warp, lane] = key
             warp_ids[warp, lane] = gid
@@ -328,7 +403,9 @@ class RankTopK:
                         key, gid = warp_keys[w, lane], warp_ids[w, lane]
                 cta_keys.append(key)
                 cta_gids.append(gid)
-            key, gid = lane_merge_all(cta_keys, cta_gids, lane, len(cta_keys), self.warps)  # this CTA's top
+            key, gid = lane_merge_all(
+                cta_keys, cta_gids, lane, len(cta_keys), self.warps
+            )  # this CTA's top
             pair = lane_pair(key, gid, lane)
             if lane < topk // 2:  # topk / 2 vectors of (key, id, key, id)
                 if part == 0:
@@ -336,8 +413,12 @@ class RankTopK:
                         lists[0, 4 * lane + k] = pair[k]
                 else:
                     floats = tuple(bits_float(Uint32(w)) for w in pair)
-                    push_float(lists.iterator + part * 2 * topk + 4 * lane, floats, bar.iterator,
-                               0)
+                    push_float(
+                        lists.iterator + part * 2 * topk + 4 * lane,
+                        floats,
+                        bar.iterator,
+                        0,
+                    )
         if part == 0:
             wait_phase_zero_cluster(bar.iterator)
             cute.arch.sync_threads()
@@ -349,7 +430,9 @@ class RankTopK:
                         key, gid = lists[p, 2 * lane], lists[p, 2 * lane + 1]
                     rank_keys.append(key)
                     rank_gids.append(gid)
-                key, gid = lane_merge_all(rank_keys, rank_gids, lane, PARTS, PARTS)  # the rank's top
+                key, gid = lane_merge_all(
+                    rank_keys, rank_gids, lane, PARTS, PARTS
+                )  # the rank's top
                 pair = lane_pair(key, gid, lane)
                 if lane < topk // 2:
                     out = (
@@ -377,14 +460,32 @@ def compile_rank_topk(rows, width, tp, num_org, local, topk=TOPK):
 class DraftHead:
     """The draft head's rank half for ``rows`` predicted rows (7 per request)."""
 
-    def __init__(self, lm_head, hidden_projection, *, vocab_start, rows, tp, rank,
-                 box=None, mc=0, device=None, topk=TOPK):
+    def __init__(
+        self,
+        lm_head,
+        hidden_projection,
+        *,
+        vocab_start,
+        rows,
+        tp,
+        rank,
+        box=None,
+        mc=0,
+        device=None,
+        topk=TOPK,
+    ):
         num_org = lm_head.shape[0]
         if hidden_projection.shape != (SELECTOR_RANK, lm_head.shape[1]):
             raise ValueError(f"hidden_projection {tuple(hidden_projection.shape)}")
         weight = torch.cat([lm_head, hidden_projection]).to(torch.bfloat16).contiguous()
         self.device = device or weight.device
-        self.num_org, self.rows, self.tp, self.rank, self.topk = num_org, rows, tp, rank, topk
+        self.num_org, self.rows, self.tp, self.rank, self.topk = (
+            num_org,
+            rows,
+            tp,
+            rank,
+            topk,
+        )
         tactic = draft_tactic("head", self.device)  # tactics.py; K31DRAFT_HEAD_TACTIC
         self.projection = PreparedProjection(weight, {rows: tactic}).prepare()
         self.head_out = torch.empty(
@@ -398,11 +499,15 @@ class DraftHead:
         self.box, self.mc = box, mc
         if box.shape != (tp, rows, 2 * topk):
             raise ValueError(f"head box {tuple(box.shape)} for top_k {topk}")
-        self.code = compile_rank_topk(rows, weight.shape[0], tp, num_org, self.local, topk)
+        self.code = compile_rank_topk(
+            rows, weight.shape[0], tp, num_org, self.local, topk
+        )
         self.args = (to_cute(self.box), cutlass.Int64(mc), cutlass.Int32(rank))
         self.vocab_start = cutlass.Int32(vocab_start)
 
     def run(self, rows):
         self.projection.run(rows, self.head_out)
-        self.code(to_cute(self.head_out), *self.args, self.vocab_start, stream(self.device))
+        self.code(
+            to_cute(self.head_out), *self.args, self.vocab_start, stream(self.device)
+        )
         return self.head_out

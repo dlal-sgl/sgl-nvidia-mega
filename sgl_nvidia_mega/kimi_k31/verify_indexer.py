@@ -2,6 +2,7 @@
 """R-row K31 index-K writer with weights-only preparation."""
 
 from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
 

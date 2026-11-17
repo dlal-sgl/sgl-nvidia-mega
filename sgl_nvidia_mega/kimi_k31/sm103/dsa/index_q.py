@@ -16,7 +16,10 @@ def _load():
     return load_jit(
         "k31_index_q",
         cuda_files=[str(Path(__file__).with_suffix(".cuh"))],
-        cuda_wrappers=[("run", "k31_index_q::Binding::run"), ("run_copy", "k31_index_q::Binding::run_copy")],
+        cuda_wrappers=[
+            ("run", "k31_index_q::Binding::run"),
+            ("run_copy", "k31_index_q::Binding::run_copy"),
+        ],
         extra_include_paths=[str(Path(sglang.__file__).parent / "kernels/jit/csrc")],
     )
 
@@ -26,7 +29,11 @@ class FusedIndexQuery:
     weights [rows,32,1] FP32), owned buffers."""
 
     def __init__(self, weights, rows=1):
-        if weights.query.shape != (4096, 1536) or weights.gate.shape != (32, 7168) or not 1 <= rows <= 8:
+        if (
+            weights.query.shape != (4096, 1536)
+            or weights.gate.shape != (32, 7168)
+            or not 1 <= rows <= 8
+        ):
             raise ValueError("fused index query: replicated 32x128 heads, 1-8 rows")
         self.weights, self.rows = weights, rows
         device = weights.query.device
@@ -38,11 +45,23 @@ class FusedIndexQuery:
         """``mla_query`` [rows, heads, 576] / ``padded_query`` [rows, 1, 16, 576]: also copy the MLA query into the
         sparse core's head-padded buffer (one launch fewer than SparseMla.prepare_query)."""
         w = self.weights
-        args = (projected, hidden, w.query_norm, w.query, w.gate, self.query, self.gates.view(-1, 32), float(w.epsilon))
+        args = (
+            projected,
+            hidden,
+            w.query_norm,
+            w.query,
+            w.gate,
+            self.query,
+            self.gates.view(-1, 32),
+            float(w.epsilon),
+        )
         if mla_query is None:
             self.module.run(*args)
         else:
-            self.module.run_copy(*args, mla_query.view(torch.uint8).reshape(mla_query.shape[0], -1),
-                                 padded_query.view(torch.uint8).reshape(padded_query.shape[0], -1),
-                                 mla_query.shape[1])
+            self.module.run_copy(
+                *args,
+                mla_query.view(torch.uint8).reshape(mla_query.shape[0], -1),
+                padded_query.view(torch.uint8).reshape(padded_query.shape[0], -1),
+                mla_query.shape[1],
+            )
         return self.query.view(torch.float8_e4m3fn), self.gates

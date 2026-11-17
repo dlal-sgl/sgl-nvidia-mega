@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any
 
 import torch
+
 from sgl_nvidia_mega.kimi_k31.k3._host import HybridStepView
 
 # Names read from SGLang internals. A contract test checks these before GPU use.

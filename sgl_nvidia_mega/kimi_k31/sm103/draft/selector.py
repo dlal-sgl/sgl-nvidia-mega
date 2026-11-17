@@ -114,13 +114,26 @@ class SelectorWalk:
     candidates [B, 7, K] int64, q [B, 7, K] FP32, scores [B, 7, K, K] FP32 (written
     only with ``export_scores``, a test hook); R = 7 B, K = ``topk``."""
 
-    def __init__(self, tp, num_org, multiplier, softcap, deadline_ns=0, export_scores=False,
-                 topk=TOPK):
+    def __init__(
+        self,
+        tp,
+        num_org,
+        multiplier,
+        softcap,
+        deadline_ns=0,
+        export_scores=False,
+        topk=TOPK,
+    ):
         if tp not in (4, 8, 16):
             raise ValueError(f"SelectorWalk merges 4, 8 or 16 rank lists, got tp={tp}")
         if topk not in TOPKS:
             raise ValueError(f"SelectorWalk serves top_k {TOPKS}, got {topk}")
-        self.tp, self.num_org, self.deadline_ns, self.topk = tp, num_org, deadline_ns, topk
+        self.tp, self.num_org, self.deadline_ns, self.topk = (
+            tp,
+            num_org,
+            deadline_ns,
+            topk,
+        )
         self.export_scores = export_scores
         self.multiplier = float(np.float32(multiplier))
         self.softcap = None if softcap is None else float(np.float32(softcap))
@@ -150,11 +163,16 @@ class SelectorWalk:
             # lists' space, which every warp has finished reading at the sync before score.
             words = max(SLOTS * self.tp * 2 * topk, SLOTS * topk * topk)
             pool = alloc(smem, Int32, words)
-            lists = cute.make_tensor(pool.iterator, cute.make_layout(
-                (SLOTS, self.tp, 2 * topk), stride=(self.tp * 2 * topk, 2 * topk, 1)))
+            lists = cute.make_tensor(
+                pool.iterator,
+                cute.make_layout(
+                    (SLOTS, self.tp, 2 * topk), stride=(self.tp * 2 * topk, 2 * topk, 1)
+                ),
+            )
             lattice = cute.make_tensor(
                 cute.recast_ptr(pool.iterator, dtype=Float32),
-                cute.make_layout((SLOTS, topk, topk), stride=(topk * topk, topk, 1)))
+                cute.make_layout((SLOTS, topk, topk), stride=(topk * topk, topk, 1)),
+            )
         ids = alloc(smem, Int32, (SLOTS, topk))
         unary = alloc(smem, Float32, (SLOTS, topk))
         maps = alloc(smem, Int32, (SLOTS, topk))
@@ -166,8 +184,11 @@ class SelectorWalk:
         cute.arch.griddepcontrol_wait()
         quarter = lane % 4
         hidden = [
-            load_words(at(head_out, row, self.num_org + 32 * k + 8 * quarter), count=4,
-                       mutable=True)
+            load_words(
+                at(head_out, row, self.num_org + 32 * k + 8 * quarter),
+                count=4,
+                mutable=True,
+            )
             for k in range(SELECTOR_RANK // 32)
         ]
         key, gid = self.merge(lists, e, lane)
@@ -177,18 +198,43 @@ class SelectorWalk:
             candidates[request, e, lane] = Int64(gid)
         cute.arch.sync_threads()
         if cutlass.const_expr(topk == TOPK):
-            self.score(predecessor, successor, anchor, hidden, ids, unary, maps, lattice,
-                       request, e, lane)
+            self.score(
+                predecessor,
+                successor,
+                anchor,
+                hidden,
+                ids,
+                unary,
+                maps,
+                lattice,
+                request,
+                e,
+                lane,
+            )
         else:
-            self.score_wide(predecessor, successor, anchor, hidden, ids, unary, maps, lattice,
-                            request, e, lane)
+            self.score_wide(
+                predecessor,
+                successor,
+                anchor,
+                hidden,
+                ids,
+                unary,
+                maps,
+                lattice,
+                request,
+                e,
+                lane,
+            )
         cute.arch.sync_threads()
         if cutlass.const_expr(self.export_scores):
             for i in range(tid, SLOTS * topk * topk, 32 * SLOTS):
                 scores[request, i // (topk * topk), (i // topk) % topk, i % topk] = (
-                    lattice[i // (topk * topk), (i // topk) % topk, i % topk])
+                    lattice[i // (topk * topk), (i // topk) % topk, i % topk]
+                )
         if e == 0:
-            self.walk(lattice, maps, path, q, uniforms, temperatures, greedy, request, lane)
+            self.walk(
+                lattice, maps, path, q, uniforms, temperatures, greedy, request, lane
+            )
         cute.arch.sync_threads()
         if lane == 0:
             tokens[row] = Int64(ids[e, path[e]])
@@ -205,7 +251,9 @@ class SelectorWalk:
         values = poll(base, stride, self.tp // ranks, self.deadline_ns)
         for i in cutlass.range_constexpr(self.tp // ranks):
             words = tuple(values[i, k] for k in range(4))
-            store_words(at(lists, e, rank + ranks * i, 4 * fragment), words, shared=True)
+            store_words(
+                at(lists, e, rank + ranks * i, 4 * fragment), words, shared=True
+            )
             rearm(base + i * stride)
         rearm_fence()
         cute.arch.sync_warp()
@@ -258,8 +306,20 @@ class SelectorWalk:
         return x
 
     @cute.jit
-    def score(self, predecessor, successor, anchor, hidden, ids, unary, maps, lattice, request,
-              e, lane):
+    def score(
+        self,
+        predecessor,
+        successor,
+        anchor,
+        hidden,
+        ids,
+        unary,
+        maps,
+        lattice,
+        request,
+        e,
+        lane,
+    ):
         """Row e's 16 x 16 lattice on mma.sync m16n8k16 (A = 16 predecessor rows times
         h', B = 16 candidates in two n-tiles), then maps[e, p] = argmax over c (score_max)."""
         group, quarter = lane // 4, lane % 4
@@ -272,13 +332,19 @@ class SelectorWalk:
         # Every operand row loads 8 bf16 per 32-wide chunk at 8 * quarter; the fragments
         # use the same k permutation for A and B (as DraftMlaValue).
         rows_a = [
-            [load_words(at(predecessor, pred[j], 32 * k + 8 * quarter), count=4)
-             for k in range(SELECTOR_RANK // 32)]
+            [
+                load_words(at(predecessor, pred[j], 32 * k + 8 * quarter), count=4)
+                for k in range(SELECTOR_RANK // 32)
+            ]
             for j in range(2)
         ]
         rows_b = [
-            [load_words(at(successor, ids[e, group + 8 * n], 32 * k + 8 * quarter), count=4)
-             for k in range(SELECTOR_RANK // 32)]
+            [
+                load_words(
+                    at(successor, ids[e, group + 8 * n], 32 * k + 8 * quarter), count=4
+                )
+                for k in range(SELECTOR_RANK // 32)
+            ]
             for n in range(2)
         ]
         parts = zeros((2, 2, 4), Float32)  # (n-tile, accumulation chain, fragment)
@@ -312,8 +378,20 @@ class SelectorWalk:
                 maps[e, group + 8 * h] = best_c
 
     @cute.jit
-    def score_wide(self, predecessor, successor, anchor, hidden, ids, unary, maps, lattice,
-                   request, e, lane):
+    def score_wide(
+        self,
+        predecessor,
+        successor,
+        anchor,
+        hidden,
+        ids,
+        unary,
+        maps,
+        lattice,
+        request,
+        e,
+        lane,
+    ):
         """``score`` at K 32: the same per-entry math (k permutation, two accumulation
         chains, BF16 rounding, score_max) over 2 m-tiles (rows p = 16 m + group + 8 j) x 4
         n-tiles (columns 8 n + group); the operands load per 32-wide k chunk, as all 4 + 4
@@ -328,12 +406,18 @@ class SelectorWalk:
                 token = ids[e - 1, group + 8 * r]
             pred.append(token)
         succ = [ids[e, group + 8 * n] for n in range(ntiles)]
-        parts = zeros((mtiles, ntiles, 2, 4), Float32)  # (m-tile, n-tile, chain, fragment)
+        parts = zeros(
+            (mtiles, ntiles, 2, 4), Float32
+        )  # (m-tile, n-tile, chain, fragment)
         for k in cutlass.range_constexpr(SELECTOR_RANK // 32):
-            rows_a = [load_words(at(predecessor, pred[r], 32 * k + 8 * quarter), count=4)
-                      for r in range(2 * mtiles)]
-            rows_b = [load_words(at(successor, succ[n], 32 * k + 8 * quarter), count=4)
-                      for n in range(ntiles)]
+            rows_a = [
+                load_words(at(predecessor, pred[r], 32 * k + 8 * quarter), count=4)
+                for r in range(2 * mtiles)
+            ]
+            rows_b = [
+                load_words(at(successor, succ[n], 32 * k + 8 * quarter), count=4)
+                for n in range(ntiles)
+            ]
             for m in cutlass.range_constexpr(mtiles):
                 x, y = (self.scaled(rows_a[2 * m + j], hidden[k]) for j in range(2))
                 for s in cutlass.range_constexpr(2):
@@ -348,7 +432,9 @@ class SelectorWalk:
                 for n in cutlass.range_constexpr(ntiles):
                     for col in cutlass.range_constexpr(2):
                         c = 8 * n + 2 * quarter + col
-                        product = parts[m, n, 0, 2 * h + col] + parts[m, n, 1, 2 * h + col]
+                        product = (
+                            parts[m, n, 0, 2 * h + col] + parts[m, n, 1, 2 * h + col]
+                        )
                         v = unary[e, c] + Float32(BFloat16(product))
                         lattice[e, p, c] = v
                         scores.append((v, ids[e, c], Int32(c)))
@@ -366,7 +452,9 @@ class SelectorWalk:
                     maps[e, p] = best_c
 
     @cute.jit
-    def walk(self, lattice, maps, path, q, uniforms, temperatures, greedy, request, lane):
+    def walk(
+        self, lattice, maps, path, q, uniforms, temperatures, greedy, request, lane
+    ):
         """Warp 0, lane c < K = candidate c: 7 dependent steps from p = 0."""
         topk = self.topk
         steps = topk.bit_length() - 1  # Triton's one-warp reduce / scan over K lanes
@@ -423,8 +511,18 @@ class SelectorWalk:
 
 
 @cache
-def compile_selector_walk(rows, width, tp, vocab, num_org, multiplier, softcap, deadline_ns,
-                          export_scores, topk=TOPK):
+def compile_selector_walk(
+    rows,
+    width,
+    tp,
+    vocab,
+    num_org,
+    multiplier,
+    softcap,
+    deadline_ns,
+    export_scores,
+    topk=TOPK,
+):
     requests = rows // SLOTS
     args = (
         fake((tp, rows, 2 * topk), (rows * 2 * topk, 2 * topk, 1), torch.int32),
@@ -438,9 +536,13 @@ def compile_selector_walk(rows, width, tp, vocab, num_org, multiplier, softcap, 
         fake((rows,), (1,), torch.int64),
         fake((requests, SLOTS, topk), None, torch.int64),
         fake((requests, SLOTS, topk), None, torch.float32),
-        fake((requests if export_scores else 1, SLOTS, topk, topk), None, torch.float32),
+        fake(
+            (requests if export_scores else 1, SLOTS, topk, topk), None, torch.float32
+        ),
     )
-    walk = SelectorWalk(tp, num_org, multiplier, softcap, deadline_ns, export_scores, topk)
+    walk = SelectorWalk(
+        tp, num_org, multiplier, softcap, deadline_ns, export_scores, topk
+    )
     return cute.compile(walk, *args, make_fake_stream())
 
 
@@ -453,19 +555,35 @@ class DraftSelector:
     as today's sampler) and returns (tokens [R] int64, candidates [B, 7, K] int64, q [B, 7,
     K] FP32)."""
 
-    def __init__(self, predecessor, successor, *, box, head_out, num_org,
-                 output_multiplier, final_logit_softcapping, deadline_ns=0,
-                 export_scores=False, topk=TOPK):
+    def __init__(
+        self,
+        predecessor,
+        successor,
+        *,
+        box,
+        head_out,
+        num_org,
+        output_multiplier,
+        final_logit_softcapping,
+        deadline_ns=0,
+        export_scores=False,
+        topk=TOPK,
+    ):
         for name, table in (("predecessor", predecessor), ("successor", successor)):
             if table.dtype != torch.bfloat16 or table.shape[1] != SELECTOR_RANK:
                 raise ValueError(f"{name} codebook {table.dtype} {tuple(table.shape)}")
             if not table.is_contiguous():
                 raise ValueError(f"{name} codebook is not contiguous")
         tp, rows = box.shape[0], box.shape[1]
-        if (rows % SLOTS or box.shape[2] != 2 * topk
-                or head_out.shape != (rows, num_org + SELECTOR_RANK)):
-            raise ValueError(f"box {tuple(box.shape)} / head_out {tuple(head_out.shape)} "
-                             f"at top_k {topk}")
+        if (
+            rows % SLOTS
+            or box.shape[2] != 2 * topk
+            or head_out.shape != (rows, num_org + SELECTOR_RANK)
+        ):
+            raise ValueError(
+                f"box {tuple(box.shape)} / head_out {tuple(head_out.shape)} "
+                f"at top_k {topk}"
+            )
         self.device, self.requests, self.topk = box.device, rows // SLOTS, topk
         b, dev = self.requests, self.device
         self.tokens = torch.empty(rows, dtype=torch.int64, device=dev)
@@ -475,11 +593,25 @@ class DraftSelector:
         self.temperatures = torch.ones(b, dtype=torch.float32, device=dev)
         self.greedy_mask = torch.ones(b, dtype=torch.bool, device=dev)
         # [B, 7, K, K] FP32 lattice for tests (``export_scores``); else a stub
-        self.scores = torch.empty(b if export_scores else 1, SLOTS, topk, topk,
-                                  dtype=torch.float32, device=dev)
+        self.scores = torch.empty(
+            b if export_scores else 1,
+            SLOTS,
+            topk,
+            topk,
+            dtype=torch.float32,
+            device=dev,
+        )
         self.code = compile_selector_walk(
-            rows, head_out.shape[1], tp, predecessor.shape[0], num_org,
-            output_multiplier, final_logit_softcapping, deadline_ns, export_scores, topk,
+            rows,
+            head_out.shape[1],
+            tp,
+            predecessor.shape[0],
+            num_org,
+            output_multiplier,
+            final_logit_softcapping,
+            deadline_ns,
+            export_scores,
+            topk,
         )
         self.head_args = (to_cute(box), to_cute(head_out))
         self.out_args = (
@@ -501,14 +633,21 @@ class DraftSelector:
             self.temperatures.fill_(1.0)
             self.greedy_mask.fill_(True)
             return
-        torch.clamp(temperatures.view(-1)[: self.requests].to(torch.float32), min=1e-5,
-                    out=self.temperatures)
+        torch.clamp(
+            temperatures.view(-1)[: self.requests].to(torch.float32),
+            min=1e-5,
+            out=self.temperatures,
+        )
         self.greedy_mask.copy_(greedy_mask.view(-1)[: self.requests])
 
     def run(self, anchor):
         if anchor.shape != (self.requests,) or anchor.dtype != torch.int64:
             raise ValueError(f"anchor {anchor.dtype} {tuple(anchor.shape)}")
         self.uniforms.uniform_()  # in-graph philox draw, one [B, 7] per replay
-        self.code(*self.head_args, to_cute(anchor.contiguous(), 8), *self.out_args,
-                  stream(self.device))
+        self.code(
+            *self.head_args,
+            to_cute(anchor.contiguous(), 8),
+            *self.out_args,
+            stream(self.device),
+        )
         return self.tokens, self.candidates, self.q

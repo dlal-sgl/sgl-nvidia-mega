@@ -65,7 +65,9 @@ class PreparedMoE:
         self.sms = torch.cuda.get_device_properties(state.device).multi_processor_count
         for b, sms in front.split.items():  # the split's down CTAs take the SMs left
             experts.grids[b] = min(experts.grid_for(b), self.sms - sms)
-        if self.order == "after":  # the down rows run after the experts: every SM to them
+        if (
+            self.order == "after"
+        ):  # the down rows run after the experts: every SM to them
             for b in state.batches:
                 if front.chained(b):
                     experts.grids[b] = experts.grid

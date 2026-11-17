@@ -16,12 +16,16 @@ class RowScratch:
 
     def rows(self, name, rows, shape, dtype, *, zero=False):
         if rows > self.max_rows:
-            raise ValueError(f"{name}: {rows} rows exceed the shared scratch's {self.max_rows}")
+            raise ValueError(
+                f"{name}: {rows} rows exceed the shared scratch's {self.max_rows}"
+            )
         key = (name, tuple(shape), dtype)
         buffer = self.buffers.get(key)
         if buffer is None:
             make = torch.zeros if zero else torch.empty
-            buffer = self.buffers[key] = make((self.max_rows, *shape), dtype=dtype, device=self.device)
+            buffer = self.buffers[key] = make(
+                (self.max_rows, *shape), dtype=dtype, device=self.device
+            )
         return buffer[:rows]
 
 

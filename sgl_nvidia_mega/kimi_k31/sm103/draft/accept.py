@@ -86,7 +86,12 @@ class ArgmaxAccept:
             i0 = Float32(local[row0 + 2 * tid, 1])
             v1 = Float32(local[row0 + 2 * tid + 1, 0])
             i1 = Float32(local[row0 + 2 * tid + 1, 1])
-            words = [_canon(v0), Uint32(float_bits(i0)), _canon(v1), Uint32(float_bits(i1))]
+            words = [
+                _canon(v0),
+                Uint32(float_bits(i0)),
+                _canon(v1),
+                Uint32(float_bits(i1)),
+            ]
             if cutlass.const_expr(self.local):
                 store_words(at(box, rank, row0 + 2 * tid, 0), tuple(words))
             else:
@@ -164,8 +169,9 @@ def compile_argmax_accept(rows, tp, requests, sim_real_token, local, deadline_ns
     sim = fake((1,), (1,), torch.int32, 4)
     args = (local_t, box, cutlass.Int64(0), cutlass.Int32(0), cand, vec64, sim)
     args += (cand, vec32, vec32, vec64, cand, vec64)
-    kernel = ArgmaxAccept(tp, sim_real_token=sim_real_token, local=local,
-                          deadline_ns=deadline_ns)
+    kernel = ArgmaxAccept(
+        tp, sim_real_token=sim_real_token, local=local, deadline_ns=deadline_ns
+    )
     return cute.compile(kernel, *args, make_fake_stream())
 
 
@@ -178,8 +184,14 @@ class DraftAccept:
     def __init__(self, comm, shapes, *, sim_real_token=True, deadline_ns=0):
         self.comm, self.shapes = comm, shapes
         self.rows, self.requests = shapes.tokens, shapes.requests
-        self.code = compile_argmax_accept(self.rows, shapes.tp, self.requests, bool(sim_real_token),
-                                          False, deadline_ns)
+        self.code = compile_argmax_accept(
+            self.rows,
+            shapes.tp,
+            self.requests,
+            bool(sim_real_token),
+            False,
+            deadline_ns,
+        )
 
     def run(self, local, candidates, prefix_lens, sim_commit, out, parity=0):
         """``local`` [rows, 2] FP32 (this rank's ``softcap_row_argmax``); ``candidates``
@@ -190,19 +202,41 @@ class DraftAccept:
         [B] int64)."""
         target, accept_len, commit_lens, bonus, out_tokens, new_seq_lens = out
         b, rows = self.requests, self.rows
-        expect = ((local, (rows, 2), torch.float32), (candidates, (b, BLOCK), torch.int64),
-                  (prefix_lens, (b,), torch.int64), (sim_commit, (1,), torch.int32),
-                  (target, (b, BLOCK), torch.int64), (accept_len, (b,), torch.int32),
-                  (commit_lens, (b,), torch.int32), (bonus, (b,), torch.int64),
-                  (out_tokens, (b, BLOCK), torch.int64), (new_seq_lens, (b,), torch.int64))
+        expect = (
+            (local, (rows, 2), torch.float32),
+            (candidates, (b, BLOCK), torch.int64),
+            (prefix_lens, (b,), torch.int64),
+            (sim_commit, (1,), torch.int32),
+            (target, (b, BLOCK), torch.int64),
+            (accept_len, (b,), torch.int32),
+            (commit_lens, (b,), torch.int32),
+            (bonus, (b,), torch.int64),
+            (out_tokens, (b, BLOCK), torch.int64),
+            (new_seq_lens, (b,), torch.int64),
+        )
         for tensor, shape, dtype in expect:
-            if tuple(tensor.shape) != shape or tensor.dtype != dtype or not tensor.is_contiguous():
-                raise ValueError(f"ArgmaxAccept argument {tuple(tensor.shape)} {tensor.dtype}, "
-                                 f"expected contiguous {shape} {dtype}")
+            if (
+                tuple(tensor.shape) != shape
+                or tensor.dtype != dtype
+                or not tensor.is_contiguous()
+            ):
+                raise ValueError(
+                    f"ArgmaxAccept argument {tuple(tensor.shape)} {tensor.dtype}, "
+                    f"expected contiguous {shape} {dtype}"
+                )
         box = self.comm.argmax[parity]
         mc = self.comm.argmax_mc + parity * box.numel() * 4
-        args = (to_cute(local, 4), to_cute(box, 4), cutlass.Int64(mc), cutlass.Int32(self.shapes.rank))
-        args += (to_cute(candidates, 8), to_cute(prefix_lens, 8), to_cute(sim_commit, 4))
+        args = (
+            to_cute(local, 4),
+            to_cute(box, 4),
+            cutlass.Int64(mc),
+            cutlass.Int32(self.shapes.rank),
+        )
+        args += (
+            to_cute(candidates, 8),
+            to_cute(prefix_lens, 8),
+            to_cute(sim_commit, 4),
+        )
         args += (to_cute(target, 8), to_cute(accept_len, 4), to_cute(commit_lens, 4))
         args += (to_cute(bonus, 8), to_cute(out_tokens, 8), to_cute(new_seq_lens, 8))
         self.code(*args, stream(local.device))
@@ -237,14 +271,22 @@ class Rank0Broadcast:
         if tid == 0:
             if rank == Int32(0):
                 value = bonus[req]
-                words = (Uint32(accept_len[req]), Uint32(value & Int64(0xFFFFFFFF)),
-                         Uint32(value >> Int64(32)), Uint32(BCAST_MAGIC))
+                words = (
+                    Uint32(accept_len[req]),
+                    Uint32(value & Int64(0xFFFFFFFF)),
+                    Uint32(value >> Int64(32)),
+                    Uint32(BCAST_MAGIC),
+                )
                 if cutlass.const_expr(self.local):
                     store_words(at(box, req, 0), words)
                 else:
                     offset = cute.crd2idx((req, 0), box.layout)
-                    for w in cutlass.range_constexpr(4):  # multimem.st has no vector form for b32
-                        multicast_words(mc + (Int64(offset) + w) * 4, (words[w],), kind="b32")
+                    for w in cutlass.range_constexpr(
+                        4
+                    ):  # multimem.st has no vector form for b32
+                        multicast_words(
+                            mc + (Int64(offset) + w) * 4, (words[w],), kind="b32"
+                        )
             pointer = at(box, req, 0)
             got = poll(pointer, 0, 1, self.deadline_ns)
             accept_len[req] = Int32(got[0, 0])
@@ -258,9 +300,14 @@ def compile_rank0_broadcast(rows, local, deadline_ns):
     # Natural alignment only, so every rank accepts any contiguous accept_len / bonus (a rank-local fallback
     # would leave its peers polling).
     box = fake((rows, 4), (4, 1), torch.int32, 16)
-    lens, bonus = fake((cute.sym_int(),), (1,), torch.int32, 4), fake((cute.sym_int(),), (1,), torch.int64, 8)
+    lens, bonus = (
+        fake((cute.sym_int(),), (1,), torch.int32, 4),
+        fake((cute.sym_int(),), (1,), torch.int64, 8),
+    )
     args = (lens, bonus, box, cutlass.Int64(0), cutlass.Int32(0))
-    return cute.compile(Rank0Broadcast(local=local, deadline_ns=deadline_ns), *args, make_fake_stream())
+    return cute.compile(
+        Rank0Broadcast(local=local, deadline_ns=deadline_ns), *args, make_fake_stream()
+    )
 
 
 class Rank0Bcast:
@@ -286,16 +333,29 @@ class Rank0Bcast:
     def run(self, accept_len, bonus, parity=None):
         """``accept_len`` [B] int32, ``bonus`` [B] int64, contiguous, B <= rows: rank 0's values on every rank."""
         b = accept_len.shape[0]
-        if (accept_len.dtype != torch.int32 or bonus.dtype != torch.int64 or accept_len.dim() != 1
-                or tuple(bonus.shape) != (b,) or not accept_len.is_contiguous() or not bonus.is_contiguous()
-                or not 0 < b <= self.rows):
-            raise ValueError(f"rank-0 broadcast of accept_len {tuple(accept_len.shape)} {accept_len.dtype}, "
-                             f"bonus {tuple(bonus.shape)} {bonus.dtype} (rows {self.rows})")
+        if (
+            accept_len.dtype != torch.int32
+            or bonus.dtype != torch.int64
+            or accept_len.dim() != 1
+            or tuple(bonus.shape) != (b,)
+            or not accept_len.is_contiguous()
+            or not bonus.is_contiguous()
+            or not 0 < b <= self.rows
+        ):
+            raise ValueError(
+                f"rank-0 broadcast of accept_len {tuple(accept_len.shape)} {accept_len.dtype}, "
+                f"bonus {tuple(bonus.shape)} {bonus.dtype} (rows {self.rows})"
+            )
         if parity is None:
             parity, self.parity = self.parity, self.parity ^ 1
         box = self.box[parity]
         mc = self.mc + parity * box.numel() * 4
-        self.code(dynamic_view(accept_len, 4), dynamic_view(bonus, 8), to_cute(box, 16), cutlass.Int64(mc),
-                  cutlass.Int32(self.rank), stream(accept_len.device))
+        self.code(
+            dynamic_view(accept_len, 4),
+            dynamic_view(bonus, 8),
+            to_cute(box, 16),
+            cutlass.Int64(mc),
+            cutlass.Int32(self.rank),
+            stream(accept_len.device),
+        )
         self.calls += 1
-

@@ -195,8 +195,20 @@ class DraftAux:
     [7168], ``kv_a`` [layers x [576, 7168]] (fused_a rows 1536:2112), ``kv_norms`` [layers
     x [512]], ``cos_sin`` [max_pos, 64] FP32; ``comm.aux`` is the gather's mailbox."""
 
-    def __init__(self, fc_slice, hidden_norm, kv_a, kv_norms, cos_sin, comm, shapes,
-                 *, eps, k_scale=1.0, deadline_ns=0):
+    def __init__(
+        self,
+        fc_slice,
+        hidden_norm,
+        kv_a,
+        kv_norms,
+        cos_sin,
+        comm,
+        shapes,
+        *,
+        eps,
+        k_scale=1.0,
+        deadline_ns=0,
+    ):
         rows, tp = shapes.tokens, shapes.tp
         bf16 = lambda t: t.detach().to(torch.bfloat16).contiguous()  # noqa: E731
         self.device, self.rows = fc_slice.device, rows
@@ -207,7 +219,9 @@ class DraftAux:
         fc_tactic = draft_tactic("fc_slice", self.device)
         self.fc = PreparedProjection(bf16(fc_slice), {rows: fc_tactic}).prepare()
         stacked = torch.cat([bf16(w) for w in kv_a])
-        self.kv = PreparedProjection(stacked, {rows: draft_tactic("kv_stack", self.device)})
+        self.kv = PreparedProjection(
+            stacked, {rows: draft_tactic("kv_stack", self.device)}
+        )
         self.kv.prepare()
         self.layers = len(kv_a)
         self.hidden_norm = to_cute(bf16(hidden_norm))
@@ -220,7 +234,9 @@ class DraftAux:
         self.kv_rows = new(self.layers * ROW)
         self.blocks = self.gathered.view(rows, 1, HIDDEN)  # unused at nb = 0
         self.gather = compile_gather(rows, self.width, tp, deadline_ns)
-        self.insert = compile_insert(rows, self.layers, self.cos_sin.shape[0], shapes.rows)
+        self.insert = compile_insert(
+            rows, self.layers, self.cos_sin.shape[0], shapes.rows
+        )
         self.eps, self.ksi = cutlass.Float32(eps), cutlass.Float32(1.0 / k_scale)
 
     def run(self, target_hidden, positions, slots_2d, commit_lens, pools, parity=0):
@@ -232,7 +248,11 @@ class DraftAux:
         mc = self.comm.aux_mc + parity * self.comm.aux[0].numel() * 2
         head = (to_cute(self.local), box, cutlass.Int64(mc))
         head += (cutlass.Int32(self.rank),)
-        tail = (dynamic_view(self.gathered), dynamic_view(self.blocks), self.hidden_norm)
+        tail = (
+            dynamic_view(self.gathered),
+            dynamic_view(self.blocks),
+            self.hidden_norm,
+        )
         tail += (self.hidden_norm, self.hidden_norm, dynamic_view(self.ctx), None, None)
         tail += (self.eps, self.eps)
         self.gather(*head, *tail, s)

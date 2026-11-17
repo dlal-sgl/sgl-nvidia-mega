@@ -56,8 +56,8 @@ from ..common.primitives import (
     wait_tmem,
     zeros,
 )
-
-from .math import latent_inv_rms as inv_rms, square_add
+from .math import latent_inv_rms as inv_rms
+from .math import square_add
 
 shuffle = cute.arch.shuffle_sync
 
@@ -105,14 +105,18 @@ class MoeTail:
     threads = 128
     options: dict = {}
 
-    def __init__(self, tp: int, batch: int, *, mode="front", trigger=2, deadline_ns=0, fold=False):
+    def __init__(
+        self, tp: int, batch: int, *, mode="front", trigger=2, deadline_ns=0, fold=False
+    ):
         self.tp, self.batch, self.mode, self.trigger = tp, batch, mode, trigger
         self.deadline_ns = deadline_ns
         # F1 (``K31MK_TAIL_RMS_FOLD``, not bitwise): the up projection runs on bf16(x * gamma) as
         # soon as the latent settles, beside the cluster squares exchange, which now goes to the
         # owner (q == 0) only; the owner scales its row sums by inv_rms before the BF16 rounding.
         # Today x is normalized, gamma-scaled and rounded before the gemv.
-        assert not fold or (mode == "front" and trigger == 2), "F1 fold: front mode, trigger 2 only"
+        assert not fold or (mode == "front" and trigger == 2), (
+            "F1 fold: front mode, trigger 2 only"
+        )
         self.fold = fold
         self.cluster, self.tokens = (7 if tp == 8 else 8), min(batch, 2)
         self.poll_ns, self.front_poll_ns = (0, 0) if tp == 8 else (64, 128)
@@ -342,7 +346,9 @@ class MoeTail:
         for stage in cutlass.range_constexpr(5):
             s2 += cute.arch.shuffle_sync_bfly(s2, 16 >> stage)
         cute.arch.cluster_wait()
-        sq_peers = 1 if cutlass.const_expr(self.fold) else self.cluster  # F1: the owner only
+        sq_peers = (
+            1 if cutlass.const_expr(self.fold) else self.cluster
+        )  # F1: the owner only
         if pt < local_tokens and lane < sq_peers:
             sq = squares.iterator + (2 * q + (warp & 1)) * local_tokens + pt
             push_float(sq, s2, bar + 1, lane)
@@ -362,7 +368,9 @@ class MoeTail:
             gx = smem_words(sg.iterator + pk * 8)
             xx = smem_words(sx.iterator + pt * self.cols + pk * 8)
             scaled = lambda k, h: bf16(xx[k], h) * inverse * bf16(gx[k], h)
-            if cutlass.const_expr(self.fold):  # F1: gamma only (the owner applies inv_rms; dead above)
+            if cutlass.const_expr(
+                self.fold
+            ):  # F1: gamma only (the owner applies inv_rms; dead above)
                 scaled = lambda k, h: bf16(xx[k], h) * bf16(gx[k], h)
             packed = [pack_pair(scaled(k, 0), scaled(k, 1)) for k in range(4)]
             store_shared_words(sx.iterator + pt * self.cols + pk * 8, packed)
@@ -380,7 +388,9 @@ class MoeTail:
                 value = Float32(0)
                 for peer in cutlass.range_constexpr(self.cluster):
                     value += partial[(peer * 32 + lane) * local_tokens + warp]
-                if cutlass.const_expr(self.fold):  # F1: this token's inv_rms on the row sum
+                if cutlass.const_expr(
+                    self.fold
+                ):  # F1: this token's inv_rms on the row sum
                     wait(bar + 1)
                     cute.arch.sync_warp()
                     total = Float32(0)
@@ -578,7 +588,9 @@ class WaveMoeTail(MoeTail):
                     load_tma2(tile, weight.iterator, bar + 3, 224 * q + 64 * kb, row0)
             # One group gathers 28 lane sums per (token, slice), more one sum for
             # every warp's token.
-            gathered = 16 * batch * 28 * 4 if not self.reduce else 16 * 8 * self.padded * 4
+            gathered = (
+                16 * batch * 28 * 4 if not self.reduce else 16 * 8 * self.padded * 4
+            )
             cute.arch.mbarrier_arrive_and_expect_tx(bar, gathered)
             size = 4096 if owns(self.slots - 1) else 0  # earlier lines are all owned
             size = size + 4096 * (self.slots - 1) if self.slots > 1 else size

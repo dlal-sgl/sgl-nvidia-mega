@@ -104,9 +104,17 @@ OPROJ_FP8 = "K31MK_OPROJ_FP8"
 
 def fp8_partials(batch, tp, twoshot):
     """Whether ``batch`` sends MXFP8 partials (``OPROJ_FP8``; TP16 one-shot B<=8)."""
-    on = os.environ.get(OPROJ_FP8, "0") not in ("", "0") and tp == 16 and batch <= 8 and not twoshot
+    on = (
+        os.environ.get(OPROJ_FP8, "0") not in ("", "0")
+        and tp == 16
+        and batch <= 8
+        and not twoshot
+    )
     if on:
-        _engaged("fp8", "NVIDIA megakernel: o-proj all-reduce partials in MXFP8 (K31MK_OPROJ_FP8, not bitwise)")
+        _engaged(
+            "fp8",
+            "NVIDIA megakernel: o-proj all-reduce partials in MXFP8 (K31MK_OPROJ_FP8, not bitwise)",
+        )
     return on
 
 
@@ -118,8 +126,11 @@ def norm_fold(tp):
     """Whether the consumers fold the final-norm exchange (``OPROJ_NORM_FOLD``; TP16)."""
     on = best_default(OPROJ_NORM_FOLD, "1", "0") not in ("", "0") and tp == 16
     if on:
-        _engaged("fold", "NVIDIA megakernel: o-proj AttnRes final norm folded into exchange 1 "
-                         "(K31MK_OPROJ_NORM_FOLD, not bitwise)")
+        _engaged(
+            "fold",
+            "NVIDIA megakernel: o-proj AttnRes final norm folded into exchange 1 "
+            "(K31MK_OPROJ_NORM_FOLD, not bitwise)",
+        )
     return on
 
 

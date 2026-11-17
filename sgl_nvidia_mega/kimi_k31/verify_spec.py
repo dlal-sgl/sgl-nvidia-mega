@@ -26,7 +26,9 @@ def config_disable_reasons(cfg, hf_config):
         reasons.append("K31 verify requires DFLASH")
     q = int(cfg.speculative_num_draft_tokens or 0)
     if not supported_query_width(q):
-        reasons.append("K31 verify requires explicit Q8, Q16, or opt-in K31MK_VERIFY_Q5=1")
+        reasons.append(
+            "K31 verify requires explicit Q8, Q16, or opt-in K31MK_VERIFY_Q5=1"
+        )
     if not cfg.enable_linear_replayssm_spec:
         reasons.append("K31 verify requires KDA ReplaySSM spec rings")
     if cfg.enable_linear_replayssm:
@@ -45,15 +47,22 @@ def config_disable_reasons(cfg, hf_config):
     prefill_cp = bool(getattr(cfg, "enable_prefill_cp", False))
     q5_scope = q == 5 and supported_query_width(q) and int(cfg.tp_size) == dcp == 8
     if q == 5 and not (q5_scope and cp == 1 and not prefill_cp):
-        reasons.append("K31 Q5 is limited to TP8/DCP8 without extra context parallelism")
+        reasons.append(
+            "K31 Q5 is limited to TP8/DCP8 without extra context parallelism"
+        )
     if dcp > 1 or cp > 1 or prefill_cp:
         # Sparse verify's context-parallel path: index-K / latent KV token-strided over the
         # whole TP group, Q8 rows (dsa/verify.py PreparedSparseVerifyMla).
-        if not (dcp == int(cfg.tp_size) and dcp in DCP_SIZES
-                and (q == 8 or q5_scope)
-                and cp == 1 and not prefill_cp):
+        if not (
+            dcp == int(cfg.tp_size)
+            and dcp in DCP_SIZES
+            and (q == 8 or q5_scope)
+            and cp == 1
+            and not prefill_cp
+        ):
             reasons.append(
-                "K31 verify supports DCP8/TP8 or DCP16/TP16 at Q8, or opt-in Q5 at DCP8/TP8")
+                "K31 verify supports DCP8/TP8 or DCP16/TP16 at Q8, or opt-in Q5 at DCP8/TP8"
+            )
     reasons += _disaggregation_reasons(cfg)
     return reasons
 
@@ -71,7 +80,9 @@ def _disaggregation_reasons(cfg):
         return ["K31 verify serves only the PD decode role"]
     reasons = []
     if cfg.disaggregation_transfer_backend != "mooncake":
-        reasons.append("K31 verify under PD decode is limited to the mooncake transfer backend")
+        reasons.append(
+            "K31 verify under PD decode is limited to the mooncake transfer backend"
+        )
     if cfg.disaggregation_decode_host_receive_threshold < 1:
         reasons.append("K31 verify under PD decode does not support host receive")
     return reasons
@@ -98,8 +109,11 @@ class BuiltK31Verify:
         self.request_batches = tuple(b for b, _, _ in self.keys)
         self.widths = tuple(r for _, _, r in self.keys)
         if self.query_width == 5:
-            logger.info("NVIDIA megakernel: experimental Q5 enabled; Breq=%s, rows=%s",
-                        self.request_batches, self.widths)
+            logger.info(
+                "NVIDIA megakernel: experimental Q5 enabled; Breq=%s, rows=%s",
+                self.request_batches,
+                self.widths,
+            )
         model = WeightModel(weights)
         self.resources = build_resources(
             model,
@@ -126,8 +140,11 @@ class BuiltK31Verify:
                 )
             )
         self.executor = K31VerifyExecutor(
-            self.resources, self.indexers, (), query_width=self.query_width,
-            request_batches=self.request_batches
+            self.resources,
+            self.indexers,
+            (),
+            query_width=self.query_width,
+            request_batches=self.request_batches,
         )
         self.pool_view = None
         self._active_logged = set()
@@ -165,8 +182,11 @@ class BuiltK31Verify:
     def configure_aux(self, capture_layers):
         old = self.executor
         self.executor = K31VerifyExecutor(
-            self.resources, self.indexers, capture_layers, query_width=self.query_width,
-            request_batches=self.request_batches
+            self.resources,
+            self.indexers,
+            capture_layers,
+            query_width=self.query_width,
+            request_batches=self.request_batches,
         )
         self.executor.kda_cores = old.kda_cores
         self.executor.kda_pools = old.kda_pools
@@ -217,7 +237,9 @@ class BuiltK31Verify:
                 float(layer.self_attn.o_norm.eps),
             )
             core = PreparedKdaVerify(
-                weights, tuple((b, q, pitch, 0) for b, q, _ in self.keys), old.device.index
+                weights,
+                tuple((b, q, pitch, 0) for b, q, _ in self.keys),
+                old.device.index,
             )
             core.prepare_caches(self.executor.kda_pools[layer_id])
             self.executor.kda_cores[layer_id] = core
@@ -243,8 +265,10 @@ class BuiltK31Verify:
             return False
         self._bcast.run(accept_len, bonus)
         if not self._bcast_logged:
-            logger.info("NVIDIA megakernel: rank-0 sampled-accept broadcast active (one multicast hop; "
-                        "the dflash-selector NCCL broadcasts skipped)")
+            logger.info(
+                "NVIDIA megakernel: rank-0 sampled-accept broadcast active (one multicast hop; "
+                "the dflash-selector NCCL broadcasts skipped)"
+            )
             self._bcast_logged = True
         self._count_round("rank-0 broadcast")
         return True
@@ -256,7 +280,9 @@ class BuiltK31Verify:
             logger.info("NVIDIA megakernel: %s rounds = %d", path, count[0])
             count[1] *= 10
 
-    def prepare_sampled_accept(self, *, vocab_size, softcap, shard_width, seed, topk=16):
+    def prepare_sampled_accept(
+        self, *, vocab_size, softcap, shard_width, seed, topk=16
+    ):
         """Build draft.sampled.SampledAccept (its multicast boxes and kernels) for a target head of
         ``vocab_size`` over TP shards of ``shard_width`` columns and the selector's ``topk`` (16 / 32),
         at block 5 for Q5, otherwise legacy block 8 (Q8 / Q16). True when built; False (building nothing) at TP 1, with K31MK_SAMPLED_ACCEPT off (default_scope), or
@@ -271,9 +297,17 @@ class BuiltK31Verify:
         if int(parallel.tp_size) < 2:
             return False
         # Rank-uniform: the selector and the head shard are the same on every rank.
-        if (int(topk) not in TOPKS or int(shard_width) % SLICE) and "K31MK_SAMPLED_ACCEPT" not in os.environ:
-            logger.info("NVIDIA megakernel: sampled accept off (selector K %d, shard width %d; it serves K %s and "
-                        "widths divisible by %d)", int(topk), int(shard_width), TOPKS, SLICE)
+        if (
+            int(topk) not in TOPKS or int(shard_width) % SLICE
+        ) and "K31MK_SAMPLED_ACCEPT" not in os.environ:
+            logger.info(
+                "NVIDIA megakernel: sampled accept off (selector K %d, shard width %d; it serves K %s and "
+                "widths divisible by %d)",
+                int(topk),
+                int(shard_width),
+                TOPKS,
+                SLICE,
+            )
             return False
         self._sampled = SampledAccept(
             parallel.tp_group.device_group,
@@ -293,7 +327,9 @@ class BuiltK31Verify:
     def sampled_accept_fits(self, requests, logits=None):
         return self._sampled is not None and self._sampled.fits(int(requests), logits)
 
-    def sampled_accept(self, *, logits, temperatures, candidates, candidate_ids, q_rows):
+    def sampled_accept(
+        self, *, logits, temperatures, candidates, candidate_ids, q_rows
+    ):
         """(accept_len int32 [B], bonus int64 [B], target_predict int64 [B, block]) of the chain sampled
         accept from this rank's raw verify shard (draft.sampled.SampledAccept.run); rank 0's decision
         on every rank. Collective: every rank, in the same order, after prepare_sampled_accept."""
@@ -301,9 +337,12 @@ class BuiltK31Verify:
         if not self._sampled_logged:
             # launch= names the host path (draft.sampled launch_mode): "driver/raw" expected; "cute (...)" is the
             # correct but ~4x slower CuTe-call fallback, which serving would otherwise hide.
-            logger.info("NVIDIA megakernel: sampled accept active (shard stats + one multicast record "
-                        "all-gather + rank-0 decision hop; the vocab all-gather, dense q, SoftmaxTemp and "
-                        "the dflash-selector NCCL broadcasts skipped) launch=%s", self._sampled.launch_mode)
+            logger.info(
+                "NVIDIA megakernel: sampled accept active (shard stats + one multicast record "
+                "all-gather + rank-0 decision hop; the vocab all-gather, dense q, SoftmaxTemp and "
+                "the dflash-selector NCCL broadcasts skipped) launch=%s",
+                self._sampled.launch_mode,
+            )
             self._sampled_logged = True
         self._count_round("sampled accept")
         return out

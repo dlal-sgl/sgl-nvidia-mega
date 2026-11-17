@@ -555,17 +555,25 @@ class SharedUmma(SharedBase):
             if row < valid:
                 for v in c.range_constexpr(width // 4):
                     words = tuple(positive_zero32(values[4 * v + i]) for i in range(4))
-                    offset = t * pitch + (7168 if self.tp == 8 else 3584) + 2 * (slot + row + 4 * v)
+                    offset = (
+                        t * pitch
+                        + (7168 if self.tp == 8 else 3584)
+                        + 2 * (slot + row + 4 * v)
+                    )
                     multicast_words(mc + Int64(offset) * 2, words, kind="bf16x2")
             elif (row >= split) & (row - split < shard):
                 if c.const_expr(self.tp == 8):
                     for v in c.range_constexpr(width // 4):
-                        words = tuple(positive_zero32(values[4 * v + i]) for i in range(4))
+                        words = tuple(
+                            positive_zero32(values[4 * v + i]) for i in range(4)
+                        )
                         offset = t * pitch + 2 * (base + row - split + 4 * v)
                         multicast_words(mc + Int64(offset) * 2, words, kind="bf16x2")
                 else:
                     pairs = range(0, width, 2)
-                    words = tuple(positive_zero(values[i], values[i + 1]) for i in pairs)
+                    words = tuple(
+                        positive_zero(values[i], values[i + 1]) for i in pairs
+                    )
                     offset = t * pitch + base + row - split
                     multicast_words(mc + Int64(offset) * 2, words, kind="bf16x2")
 

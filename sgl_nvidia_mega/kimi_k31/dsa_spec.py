@@ -41,7 +41,9 @@ def build_sparse_decode(model, hf_config, context):
 
     widths = tuple(width for width in context.widths if width in WIDTHS)
     if context.tokens_per_request != 1 or not widths:
-        raise ValueError("K3.1 sparse DSA requires non-spec decode at supported row widths")
+        raise ValueError(
+            "K3.1 sparse DSA requires non-spec decode at supported row widths"
+        )
     if context.binding is None:
         raise ValueError("K3.1 sparse DSA needs its SGLang tensor binding")
     validate_runtime_compatibility()

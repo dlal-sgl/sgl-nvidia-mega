@@ -29,8 +29,12 @@ class IndexProjection:
         self.rows = rows
         self.weights = weights
         device = weights.query.device
-        self.query = row_buffer(scratch, "index_projection.query", rows, (32, 128), torch.bfloat16, device)
-        self.gate = row_buffer(scratch, "index_projection.gate", rows, (32,), torch.bfloat16, device)
+        self.query = row_buffer(
+            scratch, "index_projection.query", rows, (32, 128), torch.bfloat16, device
+        )
+        self.gate = row_buffer(
+            scratch, "index_projection.gate", rows, (32,), torch.bfloat16, device
+        )
 
     def prepare_gate(self, hidden):
         torch.mm(hidden, self.weights.gate.T, out=self.gate)

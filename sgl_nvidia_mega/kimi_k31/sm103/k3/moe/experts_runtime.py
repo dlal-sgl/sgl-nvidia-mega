@@ -123,7 +123,11 @@ def compile_group(tp, experts, batch, grid, device, early=False):
 def compile_plan(batch, device, fp32=False):
     """Plan writer for callers without the routing kernel's copy role in front."""
     dtype = c.Float32 if fp32 else c.BFloat16
-    args = (fake((batch, 3584), None, dtype), fake((PLAN_BYTES,), (1,), c.Uint8), make_fake_stream())
+    args = (
+        fake((batch, 3584), None, dtype),
+        fake((PLAN_BYTES,), (1,), c.Uint8),
+        make_fake_stream(),
+    )
     with torch.accelerator.device_index(device):
         return cute.compile(ExpertsPlanKernel(batch), *args)
 
@@ -172,7 +176,15 @@ def fc2_rows(w2, tp):
 
 class PersistentExperts:
     def __init__(
-        self, w13, s13, w2, s2, *, tp=None, beta=4.0, linear_beta=25.0,
+        self,
+        w13,
+        s13,
+        w2,
+        s2,
+        *,
+        tp=None,
+        beta=4.0,
+        linear_beta=25.0,
         activation_floor=None,
     ):
         experts, rows, _ = w13.shape
@@ -194,7 +206,10 @@ class PersistentExperts:
         # The FC2 map's rows; an opt-in unpadded copy at TP16 stays alive on the object.
         self.w2_rows = fc2_rows(w2, self.tp)
         w2_tile = (192, 3, 64) if self.tp == 8 else (self.w2_rows.shape[-1], 2, 32)
-        specs = [(w13, rows, 1792, 28, 64, 2, True), (self.w2_rows, 3584, *w2_tile, 2, False)]
+        specs = [
+            (w13, rows, 1792, 28, 64, 2, True),
+            (self.w2_rows, 3584, *w2_tile, 2, False),
+        ]
         if self.tp == 8:
             specs += [specs[0]] + [(w2, 3584, 192, 3, 64, box, True) for box in (2, 1)]
         dtype = cuda.CUtensorMapDataType.CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B
@@ -233,7 +248,9 @@ class PersistentExperts:
             logger.info("NVIDIA megakernel: routed experts launch non-cooperatively")
         if prewait() and not grouped and not _PREWAIT_LOGGED:
             _PREWAIT_LOGGED.append(True)
-            logger.info("NVIDIA megakernel: routed experts route before the PDL wait (prewait)")
+            logger.info(
+                "NVIDIA megakernel: routed experts route before the PDL wait (prewait)"
+            )
         args: tuple = (batch, self.grid_for(batch), self.device.index, mode)
         args += (streamed(batch), grouped, stealing(batch), planned_b8)
         code = compile_experts(
@@ -248,7 +265,10 @@ class PersistentExperts:
             maps = self.all_maps
         group = None
         if batch > 8 or planned_b8:
-            plan = (tensor(buffers["plan"]), compile_plan(batch, self.device.index, self.tp == 8))
+            plan = (
+                tensor(buffers["plan"]),
+                compile_plan(batch, self.device.index, self.tp == 8),
+            )
             plan = plan[:1] if planned else plan
         if grouped:
             release = early_group(self.tp, batch)

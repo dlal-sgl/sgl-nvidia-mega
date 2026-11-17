@@ -22,7 +22,9 @@ def in_scope() -> bool:
             get_spec,
         )
 
-        if not all(get_context().is_config_namespace_published(n) for n in ("schedule", "spec")):
+        if not all(
+            get_context().is_config_namespace_published(n) for n in ("schedule", "spec")
+        ):
             return False
         parallel = get_parallel()
         scope = (

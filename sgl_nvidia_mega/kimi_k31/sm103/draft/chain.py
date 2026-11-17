@@ -45,9 +45,9 @@ from ..k3.gemm.projection import PreparedProjection
 from .attention import DraftAttention
 from .convgemm import PreparedConvProjection
 from .head import BITONIC, DraftHead
+from .kernels import DELTA, HIDDEN, TAPS, ConvPrepare, DraftFused, EmbedNorm, RowNorm
 from .selector import DraftSelector
 from .tactics import draft_tactic
-from .kernels import DELTA, HIDDEN, TAPS, ConvPrepare, DraftFused, EmbedNorm, RowNorm
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,9 @@ class DraftShapes:
     heads: int = 6  # per rank
     window: int = 1024
     eps: float = 1e-6
-    topk: int = 16  # the selector top_k (draft config), 16 or 32: the head box and the walk
+    topk: int = (
+        16  # the selector top_k (draft config), 16 or 32: the head box and the walk
+    )
 
     @property
     def tokens(self):
@@ -201,7 +203,9 @@ class DraftComm:
         )
         self.head_mc = int(symm_mem.rendezvous(self.head, group).multicast_ptr or 0)
         if not self.head_mc:
-            raise RuntimeError("the draft head's candidate exchange needs multicast memory")
+            raise RuntimeError(
+                "the draft head's candidate exchange needs multicast memory"
+            )
         self.head.fill_(-0x80000000)
         # The aux stage's gather (stage 2b): [parity, TP, tokens, 7168] BF16. One hop per
         # round in serving (the draft hops between rounds order its reuse, parity 0);
@@ -224,7 +228,9 @@ class DraftComm:
         self.embed.view(torch.int32).fill_(-0x80000000)
         # The target argmax gather of ArgmaxAccept (stage 3a): [parity, TP, tokens, (value,
         # id)] int32; parity as for ``aux`` (serving 0, an eager warm-up 1).
-        self.argmax = symm_mem.empty((2, self.tp, shapes.tokens, 2), dtype=torch.int32, device=device)
+        self.argmax = symm_mem.empty(
+            (2, self.tp, shapes.tokens, 2), dtype=torch.int32, device=device
+        )
         self.argmax_mc = int(symm_mem.rendezvous(self.argmax, group).multicast_ptr or 0)
         if not self.argmax_mc:
             raise RuntimeError("the target argmax gather needs multicast memory")
@@ -247,9 +253,13 @@ class DraftComm:
         executor / mailbox owners) overlaps the draft mailboxes: the draft hop family must
         never alias a target family's Lamport slots."""
         own = device_ranges(self.buffer, self.head, self.aux, self.embed, self.argmax)
-        others = device_ranges(*targets, skip=(DraftComm,))  # a runner may hold the draft
+        others = device_ranges(
+            *targets, skip=(DraftComm,)
+        )  # a runner may hold the draft
         if not others:
-            raise RuntimeError("draft mailbox check found no CUDA buffers in the targets")
+            raise RuntimeError(
+                "draft mailbox check found no CUDA buffers in the targets"
+            )
         clashes = [
             (hex(a), hex(b), hex(c), hex(d))
             for a, b in own
@@ -274,7 +284,11 @@ def compile_fused(
     row, weight = dynamic_fake(2), fake((HIDDEN,), (1,))
     rows = (row, dynamic_fake(3), weight, weight, weight, row, None, None, eps, eps)
     kernel = DraftFused(
-        k, silu=silu, deadline_ns=deadline_ns, has_delta=has_delta, permuted=permuted,
+        k,
+        silu=silu,
+        deadline_ns=deadline_ns,
+        has_delta=has_delta,
+        permuted=permuted,
         delay_ns=delay_ns,
     )
     return cute.compile(
@@ -294,7 +308,11 @@ def compile_conv(arch):
 @cache
 def compile_embed(rows, num_org, local, deadline_ns):
     args = (fake((rows,), (1,), torch.int64, 8), fake((num_org, HIDDEN), (HIDDEN, 1)))
-    args += (fake((HIDDEN,), (1,)), fake((HIDDEN,), (1,)), fake((rows, HIDDEN), (HIDDEN, 1)))
+    args += (
+        fake((HIDDEN,), (1,)),
+        fake((HIDDEN,), (1,)),
+        fake((rows, HIDDEN), (HIDDEN, 1)),
+    )
     args += (cutlass.Int64(0), cutlass.Int64(0), dynamic_fake(2), dynamic_fake(2))
     args += (cutlass.Float32(1e-6),)
     kernel = EmbedNorm(num_org, local, deadline_ns)
@@ -356,7 +374,15 @@ class DraftChain:
     """The draft layers' PDL chain for one shape (``shapes.tokens`` rows)."""
 
     def __init__(
-        self, shapes, layers, final_norm, cos_sin, comm, *, device=None, targets=(),
+        self,
+        shapes,
+        layers,
+        final_norm,
+        cos_sin,
+        comm,
+        *,
+        device=None,
+        targets=(),
         head: Optional[DraftHeadWeights] = None,
         embed: Optional[DraftEmbedWeights] = None,
     ):
@@ -385,7 +411,9 @@ class DraftChain:
         new = lambda width: torch.empty(
             tokens, width, dtype=torch.bfloat16, device=self.device
         )
-        self.x_norm, self.x_attn, self.x_post, self.x_mlp = (new(HIDDEN) for _ in "1234")
+        self.x_norm, self.x_attn, self.x_post, self.x_mlp = (
+            new(HIDDEN) for _ in "1234"
+        )
         self.residual = new(HIDDEN)
         self.delta_attn, self.delta_mlp, self.gate_up = (new(DELTA) for _ in "123")
         self.blocks = self.residual.view(tokens, 1, HIDDEN)  # unused at nb = 0
@@ -399,10 +427,19 @@ class DraftChain:
             "draft MK chain: layers=%d tokens=%d tp=%d rank=%d fold=%s (K31DRAFT_CONV_FOLD) "
             "race_delay_ns=%d fold_early_trigger=%s tactics conv=%s gate_up=%s fused_a=%s "
             "embed=%s head=%s target_buffers_disjoint=%d",
-            len(self.layers), tokens, tp, shapes.rank, "on" if CONV_FOLD else "off",
-            RACE_DELAY_NS, FOLD_EARLY_TRIGGER, draft_tactic("conv", self.device),
-            draft_tactic("gate_up", self.device), draft_tactic("fused_a", self.device),
-            embed is not None, head is not None, self.target_buffers,
+            len(self.layers),
+            tokens,
+            tp,
+            shapes.rank,
+            "on" if CONV_FOLD else "off",
+            RACE_DELAY_NS,
+            FOLD_EARLY_TRIGGER,
+            draft_tactic("conv", self.device),
+            draft_tactic("gate_up", self.device),
+            draft_tactic("fused_a", self.device),
+            embed is not None,
+            head is not None,
+            self.target_buffers,
         )
         self.head = self.selector = None
         self.accept = None
@@ -433,7 +470,10 @@ class DraftChain:
         logger.info(
             "draft MK head: num_org=%d vocab_start=%d head tactic=%s rank top-k=8-CTA cluster "
             "top_k=%d merges=%s",
-            self.head.num_org, head.vocab_start, draft_tactic("head", self.device), shapes.topk,
+            self.head.num_org,
+            head.vocab_start,
+            draft_tactic("head", self.device),
+            shapes.topk,
             "bitonic" if BITONIC else "serial",
         )
 
@@ -444,14 +484,25 @@ class DraftChain:
         if self.embed is not None:
             raise RuntimeError("the draft chain already has a block embedding")
         shard, mask_row = embed.shard, embed.mask_row
-        if shard.dim() != 2 or shard.shape[1] != HIDDEN or tuple(mask_row.shape) != (HIDDEN,):
-            raise ValueError(f"embedding shard {tuple(shard.shape)} / mask row {tuple(mask_row.shape)}")
+        if (
+            shard.dim() != 2
+            or shard.shape[1] != HIDDEN
+            or tuple(mask_row.shape) != (HIDDEN,)
+        ):
+            raise ValueError(
+                f"embedding shard {tuple(shard.shape)} / mask row {tuple(mask_row.shape)}"
+            )
         if int(embed.vocab_start) < 0:
             raise ValueError(f"vocab_start {embed.vocab_start}")
         self.embed = (_bf16(shard), int(embed.vocab_start), _bf16(mask_row))
-        self.embed_code = compile_embed(self.shapes.tokens, shard.shape[0], False, DEADLINE_NS)
-        logger.info("draft MK embed: block embedding on device (num_org=%d vocab_start=%d)",
-                    shard.shape[0], int(embed.vocab_start))
+        self.embed_code = compile_embed(
+            self.shapes.tokens, shard.shape[0], False, DEADLINE_NS
+        )
+        logger.info(
+            "draft MK embed: block embedding on device (num_org=%d vocab_start=%d)",
+            shard.shape[0],
+            int(embed.vocab_start),
+        )
 
     def attach_accept(self, sim_real_token=True):
         """Add the target argmax gather + DFlash accept (stage 3a, ``ArgmaxAccept``) on this
@@ -460,10 +511,18 @@ class DraftChain:
 
         if self.accept is not None:
             raise RuntimeError("the draft chain already has an accept stage")
-        self.accept = DraftAccept(self.comm, self.shapes, sim_real_token=sim_real_token,
-                                  deadline_ns=DEADLINE_NS)
-        logger.info("draft MK accept: ArgmaxAccept over TP%d, B%d, sim token %s",
-                    self.shapes.tp, self.shapes.requests, "real" if sim_real_token else "fixed")
+        self.accept = DraftAccept(
+            self.comm,
+            self.shapes,
+            sim_real_token=sim_real_token,
+            deadline_ns=DEADLINE_NS,
+        )
+        logger.info(
+            "draft MK accept: ArgmaxAccept over TP%d, B%d, sim token %s",
+            self.shapes.tp,
+            self.shapes.requests,
+            "real" if sim_real_token else "fixed",
+        )
         return self.accept
 
     def _conv(self, x, delta, base, out):
@@ -493,8 +552,12 @@ class DraftChain:
         consumer's) and RMSNorm (RowNorm) of the fused hop."""
         k = self.shapes.inter if silu else self.shapes.heads * 128
         code = compile_fused(k, silu, **self.hop_args, has_delta=False)
-        self._hop(code, x, weight, hop, parity, delta, base, norm, self.scratch, self.sums)
-        self.residual.copy_((self.residual.float() + self.sums.float()).to(torch.bfloat16))
+        self._hop(
+            code, x, weight, hop, parity, delta, base, norm, self.scratch, self.sums
+        )
+        self.residual.copy_(
+            (self.residual.float() + self.sums.float()).to(torch.bfloat16)
+        )
         views = (dynamic_view(self.residual), norm, dynamic_view(self.scratch))
         views += (dynamic_view(out), self.eps)
         self.norm(*views, stream(self.device))
@@ -503,7 +566,10 @@ class DraftChain:
     def _attention(self, i, layer, positions, kv, slots, core, mark):
         if layer.attention is None:
             layer.attention = DraftAttention(
-                layer.weights, self.shapes, draft_tactic("fused_a", self.device), self.device
+                layer.weights,
+                self.shapes,
+                draft_tactic("fused_a", self.device),
+                self.device,
             )
         pool = kv.pool[i]
         cache = pool.view(-1, 1, pool.shape[-1]) if pool.dim() == 2 else pool
@@ -576,7 +642,12 @@ class DraftChain:
             if tap:
                 tap("x_norm", i, self.x_norm)
             self._conv_prepare(
-                layer.attn_conv, self.x_norm, self.delta_attn, layer, "attn", self.x_attn
+                layer.attn_conv,
+                self.x_norm,
+                self.delta_attn,
+                layer,
+                "attn",
+                self.x_attn,
             )
             fmark(i, "conv")
             if tap:
@@ -612,7 +683,9 @@ class DraftChain:
             layer.gate_up.run(self.x_mlp, self.gate_up)
             fmark(i, "gate_up")
             last = i == len(self.layers) - 1
-            norm = self.final_view if last else self.layers[i + 1].norm_views["input_norm"]
+            norm = (
+                self.final_view if last else self.layers[i + 1].norm_views["input_norm"]
+            )
             hop = (self.gate_up, layer.views["down"], 2 * i + 1, parity, self.delta_mlp)
             hop += (layer.views["mlp_base"], norm, out if last else self.x_norm)
             if exact:
@@ -629,8 +702,14 @@ class DraftChain:
             self.head.run(out[1 : self.shapes.rows])
             mark("head")
             if anchor is None:
-                raise ValueError("the candidate head needs the block's anchor token ids")
+                raise ValueError(
+                    "the candidate head needs the block's anchor token ids"
+                )
             self.selector.run(anchor)
             mark("select")
-            return out, (self.selector.tokens, self.selector.candidates, self.selector.q)
+            return out, (
+                self.selector.tokens,
+                self.selector.candidates,
+                self.selector.q,
+            )
         return out

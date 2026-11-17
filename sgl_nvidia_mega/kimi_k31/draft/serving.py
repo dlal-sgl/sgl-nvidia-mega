@@ -54,8 +54,8 @@ except ModuleNotFoundError:  # SGLang before sgl-project/sglang#45389
         Step,
     )
 
-from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
 from sgl_nvidia_mega.kimi_k31 import spec as target
+from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
 
 # The SGLang names this module reads, by file under the sglang package; test/unit/test_contract.py pins them.
 SGLANG_READS = {
@@ -67,15 +67,26 @@ SGLANG_READS = {
         "Requirements",
         "Step",
     ),
-    "srt/distributed/parallel_state.py": ("get_tp_group", "rank_in_group", "device_group", "ca_comm"),
+    "srt/distributed/parallel_state.py": (
+        "get_tp_group",
+        "rank_in_group",
+        "device_group",
+        "ca_comm",
+    ),
     "srt/layers/communication/k3_ar_fusion.py": ("_BUFS",),
     "srt/layers/layer_boundary/__init__.py": ("AttentionInputs", "get_attn_tp_context"),
-    "srt/models/deepseek_common/attention_forward_methods/__init__.py": ("AttnForwardMethod",),
+    "srt/models/deepseek_common/attention_forward_methods/__init__.py": (
+        "AttnForwardMethod",
+    ),
     "srt/utils/common.py": ("BumpAllocator",),
     "srt/layers/logits_processor.py": ("LogitsProcessorOutput",),
     "srt/layers/layernorm.py": ("variance_epsilon",),
     # 2a head: the target lm_head's vocab shard and the draft config's unary transform
-    "srt/layers/vocab_parallel_embedding.py": ("shard_indices", "num_org_elements", "org_vocab_start_index"),
+    "srt/layers/vocab_parallel_embedding.py": (
+        "shard_indices",
+        "num_org_elements",
+        "org_vocab_start_index",
+    ),
     "srt/speculative/dflash_utils.py": ("output_multiplier", "final_logit_softcapping"),
     # M1b: the core through the draft's own attention backend, and its KV pool
     "srt/model_executor/forward_context.py": ("get_attn_backend",),
@@ -172,10 +183,14 @@ class DraftLayersOnChain:
 
     widths: tuple[int, ...] = ()
     draft_sampler = None
-    draft_loop = draft_extend = begin_draft_round = graph_variants = None  # SGLang's own paths
+    draft_loop = draft_extend = begin_draft_round = graph_variants = (
+        None  # SGLang's own paths
+    )
     draft_aux_rows: tuple[int, ...] = ()  # SGLang's SupportsDraftAux
     draft_head_requests: tuple[int, ...] = ()  # SGLang's SupportsDraftSelectorHead
-    draft_head_sampling = True  # the chain's DraftSelector walks greedy and sampled requests
+    draft_head_sampling = (
+        True  # the chain's DraftSelector walks greedy and sampled requests
+    )
     draft_accept_requests: tuple[int, ...] = ()  # SGLang's SupportsDraftAccept
     draft_embed_requests: tuple[int, ...] = ()  # SGLang's SupportsDraftEmbed
     _embed_on = False  # attach_draft_embed ran: forward embeds input_ids on device
@@ -183,14 +198,20 @@ class DraftLayersOnChain:
     def __init__(self, model, hf_config, ctx):
         from sglang.srt.distributed.parallel_state import get_tp_group
 
-        from sgl_nvidia_mega.kimi_k31.sm103.draft.chain import DraftChain, DraftComm, DraftShapes
+        from sgl_nvidia_mega.kimi_k31.sm103.draft.chain import (
+            DraftChain,
+            DraftComm,
+            DraftShapes,
+        )
         from sgl_nvidia_mega.kimi_k31.verify_executor import INSTANCES
 
         group = get_tp_group()
         self.model = model
         device = model.norm.weight.device
         shapes = DraftShapes(
-            tp=group.world_size, rank=group.rank_in_group, eps=float(hf_config.rms_norm_eps),
+            tp=group.world_size,
+            rank=group.rank_in_group,
+            eps=float(hf_config.rms_norm_eps),
             # the head box; a default of 16 against a K 32 selector raises in attach_draft_head (walk K check)
             topk=int(getattr(getattr(model, "candidate_selector", None), "top_k", 16)),
         )
@@ -198,28 +219,48 @@ class DraftLayersOnChain:
         comm = DraftComm(group.device_group, device, shapes, layers=len(weights))
         cos_sin = model.layers[0].self_attn.rotary_emb.cos_sin_cache
         if not INSTANCES:
-            raise RuntimeError(f"{ENV}: no K3.1 verify executor to check the draft mailboxes against")
+            raise RuntimeError(
+                f"{ENV}: no K3.1 verify executor to check the draft mailboxes against"
+            )
         targets = (*INSTANCES, self._ar_fusion_buffers(), group.ca_comm)
         self.chain = DraftChain(
-            shapes, weights, model.norm.weight, cos_sin, comm, device=device, targets=targets
+            shapes,
+            weights,
+            model.norm.weight,
+            cos_sin,
+            comm,
+            device=device,
+            targets=targets,
         )
-        self.out = torch.empty(ROWS, model.norm.weight.shape[0], dtype=torch.bfloat16, device=device)
+        self.out = torch.empty(
+            ROWS, model.norm.weight.shape[0], dtype=torch.bfloat16, device=device
+        )
         self.widths = (ROWS,) if ROWS in ctx.widths else ()
         self._stream: Optional[int] = None
         self._layers = len(weights)
         logger.info(
             "NVIDIA megakernel: DFlash2 draft layers on the MK chain (%s, B1 x %d rows, %d layers, TP%d)",
-            ENV, ROWS, self._layers, shapes.tp,
+            ENV,
+            ROWS,
+            self._layers,
+            shapes.tp,
         )
-        logger.info("NVIDIA megakernel: draft MK: %d target buffers disjoint", self.chain.target_buffers)
+        logger.info(
+            "NVIDIA megakernel: draft MK: %d target buffers disjoint",
+            self.chain.target_buffers,
+        )
         self.device = device
         self.aux = self._build_aux(model, shapes, comm, cos_sin) if AUX else None
         self.draft_aux_rows = (ROWS,) if self.aux is not None else ()
         self._pools: Optional[torch.Tensor] = None
         self._pool_ptrs: tuple[int, ...] = ()
         self._caches: Optional[list] = None
-        self.draft_head_requests = (1,) if HEAD and self._head_serves(model) else ()  # the chain's head serves B1
-        self.draft_accept_requests = (1,) if ACCEPT else ()  # DraftAccept compiles for B1
+        self.draft_head_requests = (
+            (1,) if HEAD and self._head_serves(model) else ()
+        )  # the chain's head serves B1
+        self.draft_accept_requests = (
+            (1,) if ACCEPT else ()
+        )  # DraftAccept compiles for B1
         self.draft_embed_requests = (1,) if EMBED else ()
         self._accept = None
         self.m1b = M1B
@@ -235,10 +276,16 @@ class DraftLayersOnChain:
         from sgl_nvidia_mega.kimi_k31.sm103.draft.head import TOPKS
 
         top_k = getattr(getattr(model, "candidate_selector", None), "top_k", None)
-        if top_k in TOPKS or HEAD_ENV in os.environ:  # set: attach_draft_head raises on a mismatch
+        if (
+            top_k in TOPKS or HEAD_ENV in os.environ
+        ):  # set: attach_draft_head raises on a mismatch
             return True
-        logger.info("NVIDIA megakernel: draft MK head off: selector top-k %s, the head serves %s (%s)", top_k, TOPKS,
-                    HEAD_ENV)
+        logger.info(
+            "NVIDIA megakernel: draft MK head off: selector top-k %s, the head serves %s (%s)",
+            top_k,
+            TOPKS,
+            HEAD_ENV,
+        )
         return False
 
     @staticmethod
@@ -252,13 +299,20 @@ class DraftLayersOnChain:
         width = int(model.fc.weight.shape[0])
         attns = [layer.self_attn for layer in model.layers]
         norms = [model.hidden_norm, *(attn.kv_a_layernorm for attn in attns)]
-        kv_a = [attn.fused_qkv_a_proj_with_mqa.weight[attn.q_lora_rank:] for attn in attns]
+        kv_a = [
+            attn.fused_qkv_a_proj_with_mqa.weight[attn.q_lora_rank :] for attn in attns
+        ]
         # GatherFused publishes rank r's slice as columns [r * width, (r + 1) * width).
         if model.fc_tp_columns != (shapes.rank * width, (shapes.rank + 1) * width):
             reason = f"{AUX_ENV} needs SGLANG_OPT_DFLASH_TP_AUX_FC's rank-ordered fc slice, got {model.fc_tp_columns}"
         elif any(float(norm.variance_epsilon) != shapes.eps for norm in norms):
-            reason = f"{AUX_ENV}: hidden_norm and kv_a norms must share eps {shapes.eps}"
-        elif any(tuple(w.shape) != (MLA_ROW, model.fc.weight.shape[0] * shapes.tp) for w in kv_a):
+            reason = (
+                f"{AUX_ENV}: hidden_norm and kv_a norms must share eps {shapes.eps}"
+            )
+        elif any(
+            tuple(w.shape) != (MLA_ROW, model.fc.weight.shape[0] * shapes.tp)
+            for w in kv_a
+        ):
             reason = f"{AUX_ENV}: kv_a rows {[tuple(w.shape) for w in kv_a]}"
         else:
             reason = None
@@ -281,7 +335,10 @@ class DraftLayersOnChain:
         device = model.fc.weight.device
         logger.info(
             "NVIDIA megakernel: draft MK aux: fc tactic %s, kv tactic %s, comm.aux parity 0 (%s, rows %d)",
-            draft_tactic("fc_slice", device), draft_tactic("kv_stack", device), AUX_ENV, shapes.tokens,
+            draft_tactic("fc_slice", device),
+            draft_tactic("kv_stack", device),
+            AUX_ENV,
+            shapes.tokens,
         )
         return aux
 
@@ -315,7 +372,9 @@ class DraftLayersOnChain:
         )
 
     def summary(self) -> str:
-        return f"DFlash2 draft: {self._layers} layers on the MK chain at B1 x {ROWS} rows"
+        return (
+            f"DFlash2 draft: {self._layers} layers on the MK chain at B1 x {ROWS} rows"
+        )
 
     def plan(self, input_ids, forward_batch, *args, **kwargs):
         if not forward_batch.forward_mode.is_target_verify():
@@ -325,7 +384,10 @@ class DraftLayersOnChain:
 
     def _attention(self, positions, forward_batch):
         """The chain's M1a hook: SGLang's MLA sublayer of layer i on the conv-prepared input, up to W_UV."""
-        from sglang.srt.layers.layer_boundary import AttentionInputs, get_attn_tp_context
+        from sglang.srt.layers.layer_boundary import (
+            AttentionInputs,
+            get_attn_tp_context,
+        )
         from sglang.srt.models.deepseek_common.attention_forward_methods import (
             AttnForwardMethod,
         )
@@ -334,15 +396,24 @@ class DraftLayersOnChain:
         def attn(i, x):
             module = self.model.layers[i].self_attn
             context = get_attn_tp_context()
-            context.set_attn_inputs(AttentionInputs(x, forward_batch, module.prepare_qkv_latent))
+            context.set_attn_inputs(
+                AttentionInputs(x, forward_batch, module.prepare_qkv_latent)
+            )
             o_proj = module.o_proj
             try:
-                zero = BumpAllocator(buffer_size=2, dtype=torch.float32, device=x.device)
+                zero = BumpAllocator(
+                    buffer_size=2, dtype=torch.float32, device=x.device
+                )
                 state = module.forward_prepare(
-                    positions=positions, hidden_states=x, forward_batch=forward_batch, zero_allocator=zero
+                    positions=positions,
+                    hidden_states=x,
+                    forward_batch=forward_batch,
+                    zero_allocator=zero,
                 )
                 if state[1] != AttnForwardMethod.MLA:
-                    raise RuntimeError(f"{ENV}: the draft attention runs {state[1]}, not MLA")
+                    raise RuntimeError(
+                        f"{ENV}: the draft attention runs {state[1]}, not MLA"
+                    )
                 module.o_proj = _NoOproj()
                 return module.forward_core(state)
             finally:
@@ -356,7 +427,13 @@ class DraftLayersOnChain:
 
         def core(i, query, latent):
             attn = self.model.layers[i].self_attn.attn_mqa
-            out = attn(query.view(torch.float8_e4m3fn), None, None, forward_batch, save_kv_cache=False)
+            out = attn(
+                query.view(torch.float8_e4m3fn),
+                None,
+                None,
+                forward_batch,
+                save_kv_cache=False,
+            )
             latent.copy_(out.view(latent.shape))
 
         return core
@@ -373,7 +450,9 @@ class DraftLayersOnChain:
                 self.m1b = False
                 return None
         slots = forward_batch.out_cache_loc.view(-1, ROWS)
-        return DraftKV(pool=self._caches, ctx_len=0, window_slots=slots, block_slots=slots)
+        return DraftKV(
+            pool=self._caches, ctx_len=0, window_slots=slots, block_slots=slots
+        )
 
     def _draft_caches(self, pool):
         from sglang.srt.mem_cache.memory_pool import MLATokenToKVPool
@@ -384,19 +463,38 @@ class DraftLayersOnChain:
             type(pool) is MLATokenToKVPool
             and pool.dtype == torch.float8_e4m3fn
             and not pool.dsa_kv_cache_store_fp8
-            and (pool.dcp_replicated or pool.write_loc_is_dcp_resolved or get_parallel().attn_dcp_size == 1)
+            and (
+                pool.dcp_replicated
+                or pool.write_loc_is_dcp_resolved
+                or get_parallel().attn_dcp_size == 1
+            )
         )
         if not plain:
             if M1B_ENV in os.environ:
-                raise RuntimeError(f"{M1B_ENV} needs a plain FP8 MLA draft KV pool, got {type(pool).__name__}")
-            logger.info("NVIDIA megakernel: draft MK M1b off: the draft KV pool is not plain FP8 MLA (%s); M1a",
-                        type(pool).__name__)
+                raise RuntimeError(
+                    f"{M1B_ENV} needs a plain FP8 MLA draft KV pool, got {type(pool).__name__}"
+                )
+            logger.info(
+                "NVIDIA megakernel: draft MK M1b off: the draft KV pool is not plain FP8 MLA (%s); M1a",
+                type(pool).__name__,
+            )
             return None
         return [
-            pool.kv_buffer[layer.self_attn.attn_mqa.layer_id - pool.start_layer] for layer in self.model.layers
+            pool.kv_buffer[layer.self_attn.attn_mqa.layer_id - pool.start_layer]
+            for layer in self.model.layers
         ]
 
-    def forward(self, step, original, input_ids, positions, forward_batch, input_embeds=None, *args, **kwargs):
+    def forward(
+        self,
+        step,
+        original,
+        input_ids,
+        positions,
+        forward_batch,
+        input_embeds=None,
+        *args,
+        **kwargs,
+    ):
         from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 
         capturing = torch.cuda.is_current_stream_capturing()
@@ -407,24 +505,48 @@ class DraftLayersOnChain:
             if self._stream is None:
                 self._stream = stream
             elif stream != self._stream:
-                raise RuntimeError(f"{ENV}: a draft hop from a second stream (all-reduce program order)")
+                raise RuntimeError(
+                    f"{ENV}: a draft hop from a second stream (all-reduce program order)"
+                )
         if self._embed_on:
             # Stage 2c embeds the block ids on device; SGLang passes no embeddings (its graph buffer is stale).
             if input_ids.shape != (ROWS,):
                 raise RuntimeError(f"{EMBED_ENV}: input_ids {tuple(input_ids.shape)}")
             x0, embed = None, {"ids": input_ids}
         elif input_embeds is None or input_embeds.shape != self.out.shape:
-            raise RuntimeError(f"{ENV}: input_embeds {None if input_embeds is None else tuple(input_embeds.shape)}")
+            raise RuntimeError(
+                f"{ENV}: input_embeds {None if input_embeds is None else tuple(input_embeds.shape)}"
+            )
         else:
             x0, embed = input_embeds, {}
         # The head proposes from the block's rows 1..7; row 0 is the anchor (a no-copy view at B1).
-        head = {"anchor": input_ids.view(-1, ROWS)[:, 0]} if self.chain.head is not None else {}
+        head = (
+            {"anchor": input_ids.view(-1, ROWS)[:, 0]}
+            if self.chain.head is not None
+            else {}
+        )
         kv = self._kv(forward_batch) if self.m1b else None
         if kv is not None:
-            self.chain.run(x0, positions, kv, self.out, 0, core=self._core(forward_batch), **head, **embed)
+            self.chain.run(
+                x0,
+                positions,
+                kv,
+                self.out,
+                0,
+                core=self._core(forward_batch),
+                **head,
+                **embed,
+            )
         else:
             self.chain.run(
-                x0, positions, None, self.out, 0, attn=self._attention(positions, forward_batch), **head, **embed
+                x0,
+                positions,
+                None,
+                self.out,
+                0,
+                attn=self._attention(positions, forward_batch),
+                **head,
+                **embed,
             )
         hidden = self.out if capturing else self.out.clone()
         return LogitsProcessorOutput(next_token_logits=None, hidden_states=hidden)
@@ -449,12 +571,16 @@ class DraftLayersOnChain:
         )
         walk = self.chain.selector
         if walk.candidates.shape[-1] != selector.top_k:
-            raise RuntimeError(f"{HEAD_ENV}: head top-k {walk.candidates.shape[-1]} vs the selector's {selector.top_k}")
+            raise RuntimeError(
+                f"{HEAD_ENV}: head top-k {walk.candidates.shape[-1]} vs the selector's {selector.top_k}"
+            )
         return walk.tokens, walk.candidates, walk.q
 
     def stage_draft_head_sampling(self, *, temperatures, greedy_mask):
         """SGLang's SupportsDraftSelectorHead: the selector's host refresh before a draft forward."""
-        self.chain.selector.stage_sampling(temperatures=temperatures, greedy_mask=greedy_mask)
+        self.chain.selector.stage_sampling(
+            temperatures=temperatures, greedy_mask=greedy_mask
+        )
 
     def attach_draft_embed(self, *, embedding, mask_token_id):
         """SGLang's SupportsDraftEmbed: the chain embeds the block from this rank's target vocab shard (the anchor
@@ -483,13 +609,17 @@ class DraftLayersOnChain:
         # does not depend on other hops in between (a round may run the accept without the MK draft).
         self._accept.run(local, candidates, prefix_lens, sim_commit, out, parity=parity)
 
-    def draft_aux(self, *, target_hidden, positions, slots_2d, commit_lens, kv_caches, parity):
+    def draft_aux(
+        self, *, target_hidden, positions, slots_2d, commit_lens, kv_caches, parity
+    ):
         """SGLang's SupportsDraftAux: the decode aux append on MK blocks (DraftAux)."""
         if target_hidden.shape[0] != self.aux.rows:
             raise RuntimeError(f"{AUX_ENV}: target_hidden {tuple(target_hidden.shape)}")
         # parity is the gather's one-hop mailbox slot; SGLang alternates it over every call, eager or replayed.
         pools = self._pool_table(kv_caches, torch.cuda.is_current_stream_capturing())
-        self.aux.run(target_hidden, positions, slots_2d, commit_lens, pools, parity=parity)
+        self.aux.run(
+            target_hidden, positions, slots_2d, commit_lens, pools, parity=parity
+        )
 
     def _pool_table(self, caches, capturing):
         """int64 [layers]: each draft layer's cache base address, which the captured graph reads."""
@@ -497,9 +627,13 @@ class DraftLayersOnChain:
         if ptrs == self._pool_ptrs:
             return self._pools
         if capturing:
-            raise RuntimeError(f"{AUX_ENV}: the draft KV caches changed after the eager warm-up")
+            raise RuntimeError(
+                f"{AUX_ENV}: the draft KV caches changed after the eager warm-up"
+            )
         if len(caches) != self.aux.layers:
-            raise RuntimeError(f"{AUX_ENV}: {len(caches)} draft KV caches for {self.aux.layers} layers")
+            raise RuntimeError(
+                f"{AUX_ENV}: {len(caches)} draft KV caches for {self.aux.layers} layers"
+            )
         for cache in caches:
             if (
                 cache.element_size() != 1
@@ -507,7 +641,9 @@ class DraftLayersOnChain:
                 or not cache.is_contiguous()
                 or cache.device != self.device
             ):
-                raise RuntimeError(f"{AUX_ENV}: draft KV cache {cache.dtype} {tuple(cache.shape)}")
+                raise RuntimeError(
+                    f"{AUX_ENV}: draft KV cache {cache.dtype} {tuple(cache.shape)}"
+                )
         if self._pools is None:
             self._pools = torch.empty(len(ptrs), dtype=torch.int64, device=self.device)
         self._pools.copy_(torch.tensor(ptrs, dtype=torch.int64))

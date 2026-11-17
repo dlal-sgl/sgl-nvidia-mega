@@ -34,7 +34,12 @@ def matrix_view(tensor, *, output=False):
 # The fallback is the tactic of up to 8 rows (one N8 tile); a wider unlisted batch would reread
 # the weights once per 8 rows, so it is logged once per (kind, batch) until a sweep adds it.
 GB300_TACTICS = {
-    "mla": {1: (64, 8, 1, 12), 64: (64, 64, 2, 5), 32: (64, 32, 2, 8), 16: (64, 16, 2, 10)},
+    "mla": {
+        1: (64, 8, 1, 12),
+        64: (64, 64, 2, 5),
+        32: (64, 32, 2, 8),
+        16: (64, 16, 2, 10),
+    },
     "kda": {64: (64, 64, 1, 6), 32: (128, 32, 2, 5), 16: (128, 16, 2, 6)},
 }
 GB300_FALLBACK = {"mla": (64, 8, 4, 8), "kda": (128, 8, 2, 6)}
@@ -51,7 +56,10 @@ def _gb300_tactic(kind, batch):
         logger.warning(
             "NVIDIA megakernel: no %s projection tactic for B%d; using the %d-row tactic %s, "
             "which rereads the weights per 8 rows",
-            kind, batch, FALLBACK_MAX_ROWS, GB300_FALLBACK[kind],
+            kind,
+            batch,
+            FALLBACK_MAX_ROWS,
+            GB300_FALLBACK[kind],
         )
     return GB300_FALLBACK[kind]
 
@@ -60,7 +68,11 @@ def _gb300_tactic(kind, batch):
 # tactic by >= 5%: MLA B1-8, B16 and B64; KDA B32 and B64.
 # ``K31MK_PROJ_SM107_RETUNE=0`` keeps GB300's tactics on SM107.
 SM107_TACTICS = {
-    "mla": {**{b: (128, 8, 4, 6) for b in range(1, 9)}, 16: (128, 16, 4, 5), 64: (64, 64, 2, 6)},
+    "mla": {
+        **{b: (128, 8, 4, 6) for b in range(1, 9)},
+        16: (128, 16, 4, 5),
+        64: (64, 64, 2, 6),
+    },
     "kda": {32: (64, 32, 2, 9), 64: (64, 64, 2, 6)},
 }
 
@@ -89,10 +101,14 @@ SM103_TP16 = "K31MK_PROJ_SM103_TP16"
 # projection sweep (cold L2, the projection kernel gate): the N8 fallback rereads the weights per 8 rows
 # and was 2.2-4.2x slower. Not bitwise vs the fallback (split K differs). ``K31MK_PROJ_SM103_TP8=0`` keeps it.
 SM103_TP8_TACTICS = {
-    ("mla", 3648, 24): (64, 24, 2, 9), ("mla", 3648, 40): (64, 40, 2, 8),
-    ("mla", 3648, 48): (64, 48, 2, 7), ("mla", 3648, 56): (64, 56, 2, 7),
-    ("kda", 6288, 24): (64, 24, 1, 10), ("kda", 6288, 40): (64, 40, 1, 8),
-    ("kda", 6288, 48): (64, 48, 1, 8), ("kda", 6288, 56): (64, 64, 1, 7),
+    ("mla", 3648, 24): (64, 24, 2, 9),
+    ("mla", 3648, 40): (64, 40, 2, 8),
+    ("mla", 3648, 48): (64, 48, 2, 7),
+    ("mla", 3648, 56): (64, 56, 2, 7),
+    ("kda", 6288, 24): (64, 24, 1, 10),
+    ("kda", 6288, 40): (64, 40, 1, 8),
+    ("kda", 6288, 48): (64, 48, 1, 8),
+    ("kda", 6288, 56): (64, 64, 1, 7),
 }
 SM103_TP8 = "K31MK_PROJ_SM103_TP8"
 _SM103_TP16_LOGGED: set = set()
@@ -106,16 +122,24 @@ def projection_tactic(kind, batch, device, tp=8, rows=None):
     capability = torch.cuda.get_device_capability(device)
     # Q5/R3 uses actual 15 rows in a single N16 tile. Reuse the existing B16
     # policies, without a tactic sweep or padding the target step back to Q8.
-    if (os.environ.get("K31MK_VERIFY_Q5", "0") == "1" and capability == (10, 3)
-            and tp == 8 and batch == 15
-            and (kind, rows) in (("mla", 3648), ("kda", 6288))):
+    if (
+        os.environ.get("K31MK_VERIFY_Q5", "0") == "1"
+        and capability == (10, 3)
+        and tp == 8
+        and batch == 15
+        and (kind, rows) in (("mla", 3648), ("kda", 6288))
+    ):
         return GB300_TACTICS[kind][16]
     # New Q5 production widths reuse existing instruction tiles. Tensor rows stay
     # at 5 * requests; the Split-K kernel predicates the partial tile's outputs.
-    if (os.environ.get("K31MK_VERIFY_Q5", "0") == "1" and capability == (10, 3)
-            and tp == 8 and batch in (10, 20, 25, 30, 35)
-            and (kind, rows) in (("mla", 3648), ("kda", 6288))
-            and os.environ.get(SM103_TP8, "1") != "0"):
+    if (
+        os.environ.get("K31MK_VERIFY_Q5", "0") == "1"
+        and capability == (10, 3)
+        and tp == 8
+        and batch in (10, 20, 25, 30, 35)
+        and (kind, rows) in (("mla", 3648), ("kda", 6288))
+        and os.environ.get(SM103_TP8, "1") != "0"
+    ):
         tile_rows = {10: 16, 20: 24, 25: 32, 30: 32, 35: 40}[batch]
         if tile_rows in (16, 32):
             return GB300_TACTICS[kind][tile_rows]
@@ -131,10 +155,19 @@ def projection_tactic(kind, batch, device, tp=8, rows=None):
     if capability == (10, 3) and os.environ.get(SM103_TP16, "1") != "0":
         tactic = SM103_TP16_TACTICS.get((kind, rows, batch))
         if tactic is not None:
-            if (kind, rows, batch) not in _SM103_TP16_LOGGED:  # once per process, not per layer
+            if (
+                kind,
+                rows,
+                batch,
+            ) not in _SM103_TP16_LOGGED:  # once per process, not per layer
                 _SM103_TP16_LOGGED.add((kind, rows, batch))
-                logger.info("NVIDIA megakernel: SM103 TP16 %s projection rows=%d B%d tactic %s",
-                            kind, rows, batch, tactic)
+                logger.info(
+                    "NVIDIA megakernel: SM103 TP16 %s projection rows=%d B%d tactic %s",
+                    kind,
+                    rows,
+                    batch,
+                    tactic,
+                )
             return tactic
     if kind == "kda" and tp == 16 and os.environ.get(TP16_KDA, "0") not in ("", "0"):
         if not _TP16_KDA_LOGGED:  # once per process, not per layer

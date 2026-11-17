@@ -11,7 +11,13 @@ import cutlass
 import cutlass.cute as cute
 from cutlass import Float32, Int32, Uint32, Uint64
 
-from ..common.mailbox import poll, rearm, rearm_fence_eager, rearm_fence_end, rearm_fence_late
+from ..common.mailbox import (
+    poll,
+    rearm,
+    rearm_fence_eager,
+    rearm_fence_end,
+    rearm_fence_late,
+)
 from ..common.primitives import (
     alloc,
     at,
@@ -87,7 +93,9 @@ class ClusterAttnRes:
         self.write, self.final = write, final
         self.deadline_ns = deadline_ns
         self.aux_mixture = aux_mixture
-        self.aux_launch = aux_launch  # False: the caller launches AuxMixture itself (side stream)
+        self.aux_launch = (
+            aux_launch  # False: the caller launches AuxMixture itself (side stream)
+        )
         self.npre = 2 * nb
         self.npost = 2 if nb else 1
         self.kpre = 1 << max(self.npre - 1, 0).bit_length()

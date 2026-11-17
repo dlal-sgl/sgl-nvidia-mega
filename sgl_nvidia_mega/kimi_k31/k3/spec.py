@@ -11,6 +11,9 @@ try:
     import sglang.kernels.plugin_kernels.nvidia.spec as _host_spec
 except ModuleNotFoundError:  # SGLang before sgl-project/sglang#45389
     import sglang.srt.megakernels.spec as _host_spec
+
+from sglang.srt.runtime_context import get_model
+
 from sgl_nvidia_mega.kimi_k31.k3._host import (  # noqa: E402
     BuildContext,
     BuiltMegakernel,
@@ -21,7 +24,6 @@ from sgl_nvidia_mega.kimi_k31.k3._host import (  # noqa: E402
     Requirements,
     Step,
 )
-from sglang.srt.runtime_context import get_model
 
 if TYPE_CHECKING:
     from sgl_nvidia_mega.kimi_k31.k3._host import PreparationView
@@ -54,7 +56,9 @@ SGLANG_READS = {
         "view",
         "widths",
     ),
-    "srt/kernel_plugins/nvidia/binding.py|srt/megakernels/binding.py": ("PreparationView",),
+    "srt/kernel_plugins/nvidia/binding.py|srt/megakernels/binding.py": (
+        "PreparationView",
+    ),
     "srt/runtime_context.py": ("get_model",),
     "srt/arg_groups/fields/*.py": (
         "context_length",

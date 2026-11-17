@@ -36,8 +36,9 @@ from ..gemm.projection import PreparedProjection
 from ..gemm.ws_gemm import WsGemm
 from .experts import PLAN_BYTES, plan_b8, plan_chunk
 from .projection import Fp32FrontGemm
-from .routing import router_add, router_weight
+from .routing import router_add
 from .routing import router_sigmoid as sigmoid
+from .routing import router_weight
 from .shared import compile_down, compile_shared, situ, weight_maps
 from .tail_runtime import CAP
 
@@ -96,7 +97,11 @@ class RouteSitu:
                     self.route(logits, bias, ids, weights, scale, token, tid, mailbox)
                 elif c.const_expr(self.roles[r] == "copy"):
                     # Lamport: no dependency wait; the sentinel poll is the barrier.
-                    base = mailbox.iterator + token * mailbox.shape[2] + tid * (16 if self.fp32 else 8)
+                    base = (
+                        mailbox.iterator
+                        + token * mailbox.shape[2]
+                        + tid * (16 if self.fp32 else 8)
+                    )
                     if tid < 192:
                         self.copy(base, latent, token, tid, 2, plan)
                     else:
@@ -331,7 +336,12 @@ class RouteSitu:
             key[i] = Uint32(0)
         if c.const_expr(self.polled):
             if tid < 224:
-                cell = mailbox.iterator + token * mailbox.shape[2] + (7168 if self.fp32 else 3584) + tid * 8
+                cell = (
+                    mailbox.iterator
+                    + token * mailbox.shape[2]
+                    + (7168 if self.fp32 else 3584)
+                    + tid * 8
+                )
                 got = poll(cell, 0, 1, self.deadline_ns)
                 rearm(cell)
                 rearm_fence_eager()  # modes 2 and 3 fence once top16 is published

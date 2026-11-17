@@ -3,7 +3,6 @@
 """Lamport mailboxes: BF16 rows published in 16-byte fragments; a reader polls until no
 fragment holds the -0.0 sentinel, then re-arms."""
 
-
 import cutlass
 import cutlass.cute as cute
 from cutlass import Uint32

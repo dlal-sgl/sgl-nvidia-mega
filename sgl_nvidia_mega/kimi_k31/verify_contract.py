@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Fixed request/query axes for the K31 tensor-only verify binding."""
 
-
 import os
 
 
@@ -31,9 +30,13 @@ def verify_keys(query_width, request_batches):
     q = int(query_width)
     batches = tuple(int(b) for b in request_batches)
     if not supported_query_width(q):
-        raise ValueError("K31 verify requires Q8, legacy Q16, or opt-in K31MK_VERIFY_Q5=1")
+        raise ValueError(
+            "K31 verify requires Q8, legacy Q16, or opt-in K31MK_VERIFY_Q5=1"
+        )
     if not batches or batches != tuple(sorted(set(batches))) or batches[0] != 1:
-        raise ValueError("verify request capacities must be sorted, unique and include 1")
+        raise ValueError(
+            "verify request capacities must be sorted, unique and include 1"
+        )
     allowed = served_request_batches(q)
     if any(b not in allowed for b in batches):
         raise ValueError(f"K31 verify covers Breq {allowed} at Q{q}")
