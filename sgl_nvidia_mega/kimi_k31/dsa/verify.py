@@ -150,7 +150,6 @@ _WRITER_STREAM_LOGGED = []
 # selection. Every rank orders its DCP collectives the same way: the selection's cross-rank merge waits for the
 # gather's event. Otherwise (no usable merge: a NCCL candidate gather on the index stream) today's order stays.
 DSA_EARLY_QAG = os.environ.get("K31MK_DSA_EARLY_QAG", "0") != "0"
-DSA_Q5_SCORE_SINGLEBLOCK = os.environ.get("K31MK_DSA_Q5_SCORE_SINGLEBLOCK", "0") == "1"
 _EARLY_QAG_LOGGED = []
 # Opt-in DCP8/TP8 transport only: preserve the early/legacy stream order, but
 # multicast each rank's 12 FP8 heads directly into the core's 128-head layout.
@@ -228,17 +227,6 @@ class VerifySelection:
 
         contexts = step.score_contexts if step.dcp_size == 1 else step.local_contexts
         score_fn = deep_gemm.fp8_paged_mqa_logits
-        if (DSA_Q5_SCORE_SINGLEBLOCK and step.dcp_size == 8
-            and 1 <= step.batch_requests <= 8 and step.query_width == 5
-            and self.rows == 5 * step.batch_requests):
-            from sglang.srt.runtime_context import get_parallel
-
-            parallel = get_parallel()
-            if parallel.tp_size == 8 and parallel.dcp_comm_backend == "fi_a2a":
-                from ..sm103.dsa.q5_score_singleblock import eligible, run_logits
-
-                if eligible(query, gates, cache):
-                    score_fn = run_logits
         scores = score_fn(
             query.view(step.batch_requests, step.query_width, 32, 128), cache.view(-1, 64, 1, 132),
             gates.squeeze(-1), contexts, table, step.score_schedule,
