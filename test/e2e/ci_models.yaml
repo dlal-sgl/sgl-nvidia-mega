@@ -2,6 +2,10 @@
 # gpu and gpus: the GPU and how many of them on one host the model's tests need.
 # A runner with another GPU or fewer GPUs skips the model and logs why. A new
 # model adds its entry here; SGLang's workflow needs no change.
+#
+# Each model's key is its CI label: run-ci-sglang:<key> on a PR runs only that
+# model, and run-ci-sglang runs them all. Keys use lowercase letters, digits and
+# underscores. sync-ci-labels.yml creates the label once the entry is on main.
 
 deepseek_v41:
   gpu: GB300
