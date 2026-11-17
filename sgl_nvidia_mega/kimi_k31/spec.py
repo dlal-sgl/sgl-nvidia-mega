@@ -47,6 +47,14 @@ SGLANG_READS = {
 }
 
 
+# SGLang before sgl-project/sglang#48414 has no Kimi K3.1 host bindings (the tensor
+# verify entry): the spec still imports there and refuses every configuration.
+_K31_HOST = "tensor_verify_binding_kind" in MegakernelSpec.__struct_fields__
+_NO_K31_HOST = (
+    "this SGLang has no Kimi K3.1 megakernel host bindings (sgl-project/sglang#48414)"
+)
+
+
 def _text_config(hf_config: Any) -> Any:
     return getattr(hf_config, "text_config", hf_config)
 
@@ -96,6 +104,8 @@ def _context_reasons(context_length: int, text: Any) -> list[str]:
 
 
 def _config_disable_reasons(cfg: Any, hf_config: Any) -> list[str]:
+    if not _K31_HOST:
+        return [_NO_K31_HOST]
     text = _text_config(hf_config)
     if getattr(cfg, "speculative_algorithm", None) is not None:
         from .verify_spec import config_disable_reasons
@@ -225,8 +235,6 @@ SPEC: MegakernelSpec = msgspec.structs.replace(
             Feature.PD_DISAGGREGATION,
         }
     ),
-    tensor_verify_binding_kind=31,
-    tensor_verify_build=build_from_tensors,
     requires=msgspec.structs.replace(
         K3_SPEC.requires,
         server_args={
@@ -245,4 +253,9 @@ SPEC: MegakernelSpec = msgspec.structs.replace(
     prepare=_prepare,
     config_disable_reasons=_config_disable_reasons,
     model_disable_reasons=_model_disable_reasons,
+    **(
+        {"tensor_verify_binding_kind": 31, "tensor_verify_build": build_from_tensors}
+        if _K31_HOST
+        else {}
+    ),
 )

@@ -119,6 +119,8 @@ def test_every_sglang_import_is_declared(path):
 
 @pytest.mark.parametrize("path", READERS, ids=_id)
 def test_sglang_provides_what_the_plugin_reads(path):
+    if _id(path).startswith(K31_PACKAGE) and not _has_k31_host():
+        pytest.skip(f"{NO_K31_HOST}: {_id(path)}")
     missing, unchecked = [], []
     required = _declared(path)
     optional = _declared(path, "SGLANG_OPTIONAL_READS")
@@ -225,6 +227,18 @@ DRAFT_CHECK, DRAFT_CHECK_NAMES = (
     ("EAGLE_DRAFT_CAPTURE_CHECK",),
 )
 NO_DRAFT_CHECK = "this SGLang's EAGLE draft graph runners run no draft capture check"
+
+
+# The Kimi K3.1 megakernel reads SGLang's K3.1 host bindings (sgl-project/sglang#48414);
+# against an SGLang without them its spec refuses every configuration, and its reads
+# are skipped here, naming each file.
+K31_PACKAGE = "sgl_nvidia_mega/kimi_k31/"
+K31_HOST = "srt/kernel_plugins/nvidia/kimi_k31_verify_binding.py"
+NO_K31_HOST = "this SGLang has no Kimi K3.1 megakernel host bindings"
+
+
+def _has_k31_host() -> bool:
+    return bool(_files(K31_HOST))
 
 
 def _has_draft_check() -> bool:
@@ -335,6 +349,10 @@ def test_every_binding_callable_the_plugin_reads_is_tolerated():
         "workspace_buffer",
         "multi_ctas_kv_counter_buffer",
         "index_page_size",
+        # the Kimi K3.1 binding's hybrid pool, DSA indexer and cache views
+        "hybrid",
+        "indexer",
+        "caches",
     }
     # Startup agreement is a host preparation API, not a borrowed runtime-view
     # callable to replace with data. Keep its exact signature covered separately.
