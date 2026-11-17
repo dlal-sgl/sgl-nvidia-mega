@@ -12,8 +12,6 @@ import cutlass.cute as cute
 import torch
 from cutlass.cute.runtime import make_fake_stream
 
-from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
-
 from ..common.host import (
     architecture,
     dynamic_fake,
@@ -38,7 +36,7 @@ AUX_SIDE_CHECK = int(os.environ.get("K31MK_AUX_SIDE_CHECK", "0") or 0)
 _CHECKS_LOGGED = [0]
 _CHECK_ON_LOGGED: list = []
 logger = logging.getLogger(__name__)
-# ``K31MK_ATTNRES_CARVEOUT=N`` (100 by default in the GB300 BEST scope, kimi_k31/k3/default_scope.py; 0 = off): a carve-out of N percent of shared memory for the
+# ``K31MK_ATTNRES_CARVEOUT=N`` (off by default; 0 = off): a carve-out of N percent of shared memory for the
 # AttnRes consumer kernels, so the next layer's in-projection CTAs can start loading weights beside the AttnRes CTAs
 # before their PDL wait. A launch preference only (no change to the kernel or its synchronization). The attribute is
 # set on the compiled function, so the knob compiles its own cached copy (``carveout`` in compile_consumer's key): a
@@ -48,7 +46,7 @@ _CARVEOUT_LOGGED: list = []
 
 def attnres_carveout():
     """K31MK_ATTNRES_CARVEOUT as a percentage, or None when 0 (off)."""
-    value = best_default("K31MK_ATTNRES_CARVEOUT", "100", "")
+    value = os.environ.get("K31MK_ATTNRES_CARVEOUT", "")
     if value in ("", "0"):
         return None
     percent = int(value)

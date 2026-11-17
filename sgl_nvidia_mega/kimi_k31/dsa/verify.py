@@ -213,13 +213,13 @@ _EARLY_QAG_LOGGED = []
 # multicast each rank's 12 FP8 heads directly into the core's 128-head layout.
 DSA_DIRECT_QAG = os.environ.get("K31MK_DSA_DIRECT_QAG", "0") == "1"
 _DIRECT_QAG_LOGGED = []
-# ``K31MK_MLAQ_AFTER_SCORING`` (on by default in the GB300 BEST scope, kimi_k31/k3/default_scope.py; 0 = off), DCP1 steps on the stock scoring only
+# ``K31MK_MLAQ_AFTER_SCORING`` (off by default; 1 = on), DCP1 steps on the stock scoring only
 # (not DCP, not the context-split indexer): the MLA query waits for the indexer scoring (DeepGEMM paged logits) and
 # runs beside the top-k instead of beside the logits. The logits launch one persistent CTA per SM on a static schedule,
 # so the MLA query's resident CTAs held some of them back (on VR200 the logits ran slower beside it than alone); the
 # query is off the chain and ends before the top-k (a shorter span per layer). Same kernels and inputs: a
 # reorder; the MLA query still precedes the query copy and the sparse core in main's program order.
-MLAQ_AFTER_SCORING = best_default("K31MK_MLAQ_AFTER_SCORING", "1", "0") == "1"
+MLAQ_AFTER_SCORING = os.environ.get("K31MK_MLAQ_AFTER_SCORING", "0") == "1"
 _MLAQ_AFTER_LOGGED = []
 # ``K31MK_MLA_VALUE_EARLY_TRIGGER`` (on by default in the GB300 BEST scope, kimi_k31/k3/default_scope.py; 0 = off): the sparse verify MlaValue releases its PDL dependent (the o-proj) at entry,
 # so the o-proj's whole weight preload overlaps the core instead of a part of it (bitwise: the o-proj still

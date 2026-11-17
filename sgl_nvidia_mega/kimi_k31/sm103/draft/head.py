@@ -17,13 +17,14 @@ The order (value desc, smaller global id first) equals torch.topk(sorted) over t
 rank-major all-gather of per-rank top-k with ties to the smaller id (shards are
 contiguous vocabulary ranges).
 
-K31MK_RANKTOPK_BITONIC (read at import; on in the GB300 BEST scope, default_scope.py) builds RankTopK's three merges (warp,
+K31MK_RANKTOPK_BITONIC (read at import; off by default, 1 = on) builds RankTopK's three merges (warp,
 CTA, cluster) as lane-distributed bitonic networks instead of K serial warp_merge rounds:
 each thread's 8 values form 8 32-lane sequences, each sorted across the warp and merged
 pairwise (half-cleaner + bitonic sort) into the warp's sorted top-32; the CTA and cluster
 lists merge the same way. Same exact (value desc, id asc) top-K, so the same published
 words."""
 
+import os
 from functools import cache
 
 import cutlass
@@ -31,8 +32,6 @@ import cutlass.cute as cute
 import torch
 from cutlass import Int32, Int64, Uint32
 from cutlass.cute.runtime import make_fake_stream
-
-from sgl_nvidia_mega.kimi_k31.k3.default_scope import best_default
 
 from ..k3.common.host import fake, stream, to_cute
 from ..k3.common.primitives import (
@@ -57,7 +56,7 @@ SELECTOR_RANK = 256
 PARTS = 8  # CTAs (one cluster) per row
 EMPTY = -0x80000000  # signed ordered key below every value (incl. -inf)
 NO_ID = 0x7FFFFFFF
-BITONIC = best_default("K31MK_RANKTOPK_BITONIC", "1", "0") == "1"
+BITONIC = os.environ.get("K31MK_RANKTOPK_BITONIC", "0") == "1"
 
 
 @cute.jit

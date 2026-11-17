@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
 """K3.1 DFlash2 draft layers on the megakernel chain in serving (stage 1; ``SGLANG_K31_DRAFT_MK``).
 
-Stage 1, M1b, 2a (head), 2b (aux) and 3a (accept) are on by default in the GB300 BEST scope
+Stage 1, M1b, 2a (head) and 2b (aux) are on by default in the GB300 BEST scope
 (kimi_k31/k3/default_scope.py), off elsewhere; a stage's env set to 0 / 1 turns it off / on. By default a stage the setup does not support declines with one INFO line; one set to 1 raises.
 
 The draft graph's forward of one B1 x 8-row TARGET_VERIFY block runs ``DraftChain`` (chain.py) in place of
@@ -153,7 +153,7 @@ HEAD = ENABLED and best_default(HEAD_ENV, "1", "0") not in ("", "0")
 # Stage 3a: the greedy verify accept (row-argmax gather + DFlash accept + sim) on the chain's comm, through
 # SGLang's SupportsDraftAccept.
 ACCEPT_ENV = "SGLANG_K31_DRAFT_MK_ACCEPT"
-ACCEPT = ENABLED and best_default(ACCEPT_ENV, "1", "0") not in ("", "0")
+ACCEPT = ENABLED and os.environ.get(ACCEPT_ENV, "0") not in ("", "0")  # off by default
 # Stage 2c: the block embedding on device (the anchor row from its owner rank's vocab shard, the mask rows
 # replicated, fused with the entry RMSNorm), in place of SGLang's embedding lookup + all-reduce.
 EMBED_ENV = "SGLANG_K31_DRAFT_MK_EMBED"
