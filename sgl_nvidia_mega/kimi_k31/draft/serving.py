@@ -407,7 +407,7 @@ class DraftLayersOnChain:
             if self._stream is None:
                 self._stream = stream
             elif stream != self._stream:
-                raise RuntimeError(f"{ENV}: a draft hop from a second stream (all-reduce program order, 4920)")
+                raise RuntimeError(f"{ENV}: a draft hop from a second stream (all-reduce program order)")
         if self._embed_on:
             # Stage 2c embeds the block ids on device; SGLang passes no embeddings (its graph buffer is stale).
             if input_ids.shape != (ROWS,):

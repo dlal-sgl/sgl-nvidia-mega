@@ -26,7 +26,7 @@ from .prepared import decode_conv_weight
 # at Breq 1 and 2.
 SM107_VERIFY: dict = {(4, 8): (0, 8, 2, 4)}
 # GB300 (SM103) TP8 (12 heads per rank) verify schedules by (requests, queries), from a TP8 sweep (cold L2, the
-# test_k31_kda gates; rdx 5846 / 5852): from Breq 2, 4 CTAs per head beat the default 8 (Breq 4: 9.4 vs 14.7 us).
+# KDA kernel gates): from Breq 2, 4 CTAs per head beat the default 8 (Breq 4: 9.4 vs 14.7 us).
 # Not bitwise vs the default schedule. ``K31MK_KDA_SM103_TP8=0`` keeps the default.
 SM103_TP8_HEADS = 12
 SM103_TP8_VERIFY: dict = {

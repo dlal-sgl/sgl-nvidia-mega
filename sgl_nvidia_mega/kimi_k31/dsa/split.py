@@ -24,7 +24,7 @@ SPLIT_MIN = int(best_default("K31MK_INDEX_SPLIT_MIN", "320000", "0"))
 # Rows longer than this run the clustered candidate top-k (16384 beats 8192 at 8.4K local).
 CLUSTER_FLOOR = 16384
 # The clustered top-k's coarse bin width. At 10 bits ~5 % of real AgentX local rows overflow the 2048-entry tie
-# buffer and are redone exact on one block (AXI 5046); 11 / 12 bits narrow the bin 2x / 4x. 12 in the BEST scope (AXI2 5062), else 10.
+# buffer and are redone exact on one block; 11 / 12 bits narrow the bin 2x / 4x. 12 in the BEST scope, else 10.
 COARSE_BITS = int(best_default("K31MK_INDEX_SPLIT_COARSE_BITS", "12", "10"))
 if COARSE_BITS not in (10, 11, 12):
     raise ValueError(f"K31MK_INDEX_SPLIT_COARSE_BITS must be 10, 11 or 12, got {COARSE_BITS}")

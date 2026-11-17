@@ -22,7 +22,7 @@ Every box element is a u64 (datum | epoch << 32) written by one b64 multimem sto
 round: a reader takes an element only when its epoch is the round it expects (ctr[2], which the stats
 grid sets), so nothing is re-armed and no record of another round can be read. A naturally aligned b64
 access is single-copy atomic, so a datum never pairs with another round's epoch. Lamport sentinels with
-re-arm stores left records behind after the last call on Rubin (3250, 3291): a multicast write applied
+re-arm stores left records behind after the last call on Rubin: a multicast write applied
 after the reader's re-arm (unicast and multicast aliases of one word have no same-location order), and
 mid-run such a stale fragment would have been read as the next same-parity record.
 

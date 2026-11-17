@@ -86,7 +86,7 @@ SM103_TP16_TACTICS = {
 }
 SM103_TP16 = "K31MK_PROJ_SM103_TP16"
 # GB300 (SM103) TP8 overrides keyed by (kind, per-rank rows, batch rows) for the Q8 Breq 3/5/6/7 widths, from a TP8
-# projection sweep (cold L2, the test_k31_projection gate; rdx 5777): the N8 fallback rereads the weights per 8 rows
+# projection sweep (cold L2, the projection kernel gate): the N8 fallback rereads the weights per 8 rows
 # and was 2.2-4.2x slower. Not bitwise vs the fallback (split K differs). ``K31MK_PROJ_SM103_TP8=0`` keeps it.
 SM103_TP8_TACTICS = {
     ("mla", 3648, 24): (64, 24, 2, 9), ("mla", 3648, 40): (64, 40, 2, 8),
