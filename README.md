@@ -537,6 +537,9 @@ through normal SGLang CI first, then validate the Mega PR through the label-base
 integration flow. The guide defines unit/E2E coverage, matched accuracy and
 performance comparisons, and the evidence to include in a PR.
 
+Coding agents follow [AGENTS.md](AGENTS.md): how to write a change, how to submit
+it, and how to test it.
+
 ## License
 
 Apache License 2.0. See `LICENSE` and `NOTICE`.
