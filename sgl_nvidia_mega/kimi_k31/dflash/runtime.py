@@ -274,7 +274,7 @@ class K31DFlashRuntime:
             "(unset SGLANG_K31_DRAFT_MK_ACCEPT and SGLANG_K31_DRAFT_MK_EMBED)",
         )
         # Fixed at build (K31MK_KDA_COMMIT).
-        _require(built.kda_commit_enabled, "the KDA commit is off (K31MK_KDA_COMMIT)")
+        self._kda_commit_enabled = built.kda_commit_enabled
         # None: sampled rounds run SGLang's (_unserved); greedy rounds still run here.
         self._megakernel_sampled = self._prepare_megakernel_sampled_accept()
 
@@ -413,6 +413,8 @@ class K31DFlashRuntime:
         # The aux graphs hold no sliding-window locations.
         if self._draft_runner.runner_ids.space(IdSpaceKind.SLIDING_WINDOW) is not None:
             return "a sliding-window draft KV sub-pool (the megakernel aux writes none)"
+        if self._recurrent_commit and not self._kda_commit_enabled:
+            return "the megakernel KDA commit is off (K31MK_KDA_COMMIT)"
         if self._recurrent_commit and self._kda._kda_state() is None:
             return "a recurrent state the megakernel KDA commit is not laid out for"
         return None

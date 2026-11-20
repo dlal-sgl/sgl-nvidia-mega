@@ -431,7 +431,8 @@ class K31DFlashRuntimeRound(unittest.TestCase):
     def test_a_layout_the_kernels_do_not_serve_sends_every_round_to_sglang(self):
         """No head for the captured graphs or the block, no aux, the draft KV ring, a
         sliding-window draft pool, a recurrent state the KDA commit is not laid out
-        for: nothing fails at startup, and every round runs SGLang's, logged once."""
+        for, the KDA commit off (its default outside the scope): nothing fails at
+        startup, and every round runs SGLang's, logged once."""
         bindings = self.bindings
         cases = {
             "decode graphs [1, 2, 4]": lambda: setattr(
@@ -446,6 +447,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
                 bindings["draft_model_runner"].runner_ids, "space", lambda kind: "swa"
             ),
             "KDA state": lambda: setattr(self, "kda_state", None),
+            "KDA commit off": lambda: setattr(self.target, "kda_commit_enabled", False),
         }
         for name, change in cases.items():
             with self.subTest(name):
@@ -468,6 +470,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
                 self.chain.__dict__.update(saved[0])
                 self.spec.__dict__.update(saved[1])
                 bindings.update(saved[2])
+                self.target.kda_commit_enabled = True
                 bindings["draft_model_runner"].runner_ids.__dict__.update(saved[3])
                 self.kda_state = saved[4]
                 self.graphs.graph.cuda_graph_config.decode.bs = [1]
@@ -531,7 +534,6 @@ class K31DFlashRuntimeRound(unittest.TestCase):
 
     def test_init_refuses_what_the_runtime_does_not_implement(self):
         for name, change in {
-            "KDA commit": lambda: setattr(self.target, "kda_commit_enabled", False),
             "opt-in accept": lambda: setattr(self.chain, "draft_accept_requests", (1,)),
         }.items():
             with (
