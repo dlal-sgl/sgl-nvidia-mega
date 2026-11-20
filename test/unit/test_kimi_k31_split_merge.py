@@ -98,6 +98,10 @@ class K31DFlashRuntimeRound(unittest.TestCase):
     BLOCK = 8
 
     def setUp(self):
+        try:
+            from sglang.srt.kernel_plugins.nvidia import kimi_k31_dflash_binding  # noqa: F401
+        except ImportError:
+            self.skipTest("this SGLang has no DFlash runtime binding")
         from sgl_nvidia_mega.kimi_k31.dflash import protocol
         from sgl_nvidia_mega.kimi_k31.dflash import runtime as rt
 
