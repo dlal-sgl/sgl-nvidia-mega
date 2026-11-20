@@ -143,7 +143,6 @@ SGLANG_MOVED = {
 # What this runtime pulls from SGLang's DFlash worker (kimi_k31_dflash_binding.EXPORTS)
 # and the guard values it serves (kimi_k31_dflash_binding.GUARD);
 # test/unit/test_contract.py pins both against SGLang's binding.
-DFLASH_RUNTIME_API = 1
 DFLASH_EXPORTS = frozenset(
     {
         "block_size",
@@ -204,7 +203,6 @@ logger = logging.getLogger(__name__)
 class K31DFlashRuntime(AuxGraphs, KdaCommit):
     """One per DFlash worker, over the target's ``BuiltK31Verify``."""
 
-    api_version = DFLASH_RUNTIME_API
     exports = DFLASH_EXPORTS
     invariants = DFLASH_INVARIANTS
 
