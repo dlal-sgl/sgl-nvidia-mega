@@ -190,7 +190,7 @@ DFLASH_INVARIANTS = {
     "decode_cuda_graph_bs": (1,),
     "ragged_verify_mode": "static",
     "eager_draft_sampler": False,
-    "defer_plain_gather": frozenset({None, True}),
+    "defer_plain_gather_refused": False,
     "info_dump": False,
     "hierarchical_cache": False,
     "hisparse": False,
