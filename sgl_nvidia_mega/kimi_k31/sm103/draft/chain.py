@@ -44,7 +44,7 @@ from ..k3.common.host import (
 from ..k3.gemm.projection import PreparedProjection
 from .attention import DraftAttention
 from .convgemm import PreparedConvProjection
-from .head import BITONIC, DraftHead
+from .head import DraftHead
 from .kernels import DELTA, HIDDEN, TAPS, ConvPrepare, DraftFused, RowNorm
 from .selector import DraftSelector
 from .tactics import draft_tactic
@@ -420,12 +420,11 @@ class DraftChain:
         )  # fmt: skip
         logger.info(
             "draft MK head: num_org=%d vocab_start=%d head tactic=%s rank top-k=8-CTA cluster "
-            "top_k=%d merges=%s",
+            "top_k=%d merges=bitonic",
             self.head.num_org,
             head.vocab_start,
             draft_tactic("head", self.device),
             shapes.topk,
-            "bitonic" if BITONIC else "serial",
         )
 
     def _conv(self, x, delta, base, out):
