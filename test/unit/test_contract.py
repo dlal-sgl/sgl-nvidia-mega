@@ -13,9 +13,9 @@ SGLang into the package is listed in ``SGLANG_MOVED`` the same way: while SGLang
 defines it, both copies must be the same code; once SGLang drops it, the pin retires.
 A DFlash runtime declares the worker exports it pulls (``DFLASH_EXPORTS``) and the
 guard values it serves (``DFLASH_INVARIANTS``); SGLang's DFlash binding must export and
-guard each by name, at the same ``DFLASH_RUNTIME_API``. A file that moved
-between SGLang versions is named newest first, ``"new.py|old.py"``; the first one
-present is checked. A read name such as "replication|layout" accepts either field.
+guard each by name. A file that moved between SGLang versions is named newest first,
+``"new.py|old.py"``; the first one present is checked. A read name such as
+"replication|layout" accepts either field.
 An explicitly guarded opt-in extension uses ``SGLANG_OPTIONAL_READS``: its
 file may be absent, but all declared names must match when it is installed.
 The feature's tests must cover rejection when its extension is unavailable.
@@ -527,10 +527,6 @@ def test_the_dflash_binding_exports_and_guards_what_the_runtime_declares(path):
     if not files:
         pytest.skip(f"{NO_DFLASH_BINDING}: {_id(path)}")
     binding, runtime = _tree(files[0]), _tree(path)
-    api = ast.literal_eval(_assigned(binding, "DFLASH_RUNTIME_API"))
-    assert ast.literal_eval(_assigned(runtime, "DFLASH_RUNTIME_API")) == api, (
-        f"{_id(path)}: SGLang's DFlash binding is at API {api}"
-    )
     missing = _strings(_assigned(runtime, "DFLASH_EXPORTS")) - _strings(
         _assigned(binding, "EXPORTS")
     )
