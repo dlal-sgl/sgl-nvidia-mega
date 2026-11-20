@@ -1,11 +1,11 @@
 # Agent guide
 
-The rules for coding agents working in this repository, in the order a change
-meets them: how to write it, how to submit it, and how to test it. Read this
-before editing. [README.md](README.md) describes what each model's megakernel
-covers and how to launch it; [CONTRIBUTING.md](CONTRIBUTING.md) is the
-contributor guide for people and defines the accuracy and performance
-comparison protocol in detail.
+The rules for coding agents working in this repository, in three parts: the
+dev guide (how to write a change), the contribution guide (how to submit it)
+and the CI test guide (how to test it). Read this before editing.
+[README.md](README.md) describes what each model's megakernel covers and how to
+launch it; [CONTRIBUTING.md](CONTRIBUTING.md) is the contributor guide for
+people and defines the accuracy and performance comparison protocol in detail.
 
 This repository is an SGLang general plugin. `sgl_nvidia_mega/plugin.py` maps
 each HF architecture to its spec (`SPECS`); SGLang imports a spec only when the
@@ -13,7 +13,7 @@ server runs with `--enable-nvidia-megakernel`. A spec admits or refuses the
 setup, builds the megakernel after the model loads, and takes over the steps it
 covers. Every other step runs SGLang's own code.
 
-## 1. Writing a change
+## 1. Dev guide
 
 ### Where code goes
 
@@ -23,12 +23,15 @@ covers. Every other step runs SGLang's own code.
   `moe/`, `boundary/`, ...) and one directory per GPU architecture (`sm103/`, ...)
   for kernels and launchers. Shared helpers go in `common/`. Read the model's
   own package before assuming this layout.
-- Code that only runs for the megakernel belongs in this package, not in
-  SGLang. SGLang keeps a thin binding: a few whole-phase entry points it calls
-  and the names it lets the package read. Kimi K3.1's DFlash round
-  (`kimi_k31/dflash/`, with SGLang's `kernel_plugins/nvidia/kimi_k31_dflash_binding.py`)
-  is the reference: SGLang calls `decode_round`, which runs the whole round or
-  returns `None` before any launch so SGLang runs its own.
+- Architecture directories do not overlap. GB300 (SM103) kernels, launchers and
+  tactics live in `sm103/`, Rubin (SM107) ones in `sm107/`. A file in one
+  directory never branches on the other's compute capability and never imports
+  from it. When SM107 needs a kernel SM103 has, copy it into `sm107/` and change
+  it there. The duplication is accepted: each architecture can then be tuned,
+  rewritten or removed without touching the other. The step code chooses the
+  directory by the device's architecture once, at build.
+- Whether a change belongs in this package or in SGLang: see
+  [What goes where](#what-goes-where) in the contribution guide.
 - Do not patch SGLang internals from this package. Hooks into SGLang's own
   forward go through its `HookRegistry`.
 
@@ -77,7 +80,7 @@ Most optimizations apply to more setups than the one they were first measured
 on. Decide where a path runs from what it needs, in code: the GPU, the TP size,
 the row count it was built for, the cache layout it reads. Do not limit it to the
 configuration a benchmark used, and do not copy a list of tested settings into a
-guard. Widen coverage by validating more setups (section 3).
+guard. Widen coverage by validating more setups (CI test guide).
 
 When a setup cannot run the path:
 
@@ -101,7 +104,7 @@ When a setup cannot run the path:
   step.
 - **Numerics are declared.** A path is either bitwise with the stock step it
   replaces or changes the arithmetic on purpose; say which in the code and in
-  the PR, and test it accordingly (section 3).
+  the PR, and test it accordingly (CI test guide).
 
 ### Code
 
@@ -110,7 +113,48 @@ When a setup cannot run the path:
   kernel, units, where a constant came from. History and measurements go in the
   PR, not in comments.
 
-## 2. Submitting a change
+## 2. Contribution guide
+
+### What goes where
+
+The megakernels so far have needed three kinds of change:
+
+1. **The model's forward and its kernels:** the covered step itself, the fused
+   kernels it runs and the build that prepares them.
+2. **Speculative decoding:** the target-verify and draft rounds of DFlash,
+   DSpark and MTP, the accepts and commits around them, and their kernels.
+3. **Small optimizations:** improvements to the scheduler, PD disaggregation,
+   HiCache, CUDA graph capture and replay, or an isolated fusion or removed
+   copy, useful beyond one model's megakernel.
+
+This repository holds the first two. They are large, model-specific and change
+often; inside SGLang they would make the shared model and speculative code hard
+to read, and every SGLang change would have to keep them working. So they live
+here, and SGLang keeps only a binding:
+
+- **Binding:** SGLang defines the whole-phase entry points it calls and the
+  names the package may read; the package declares what it uses and the
+  contract tests check both sides.
+- **Guard:** the package decides from what its build offers whether it serves a
+  setup or a step: it refuses an unservable setup at startup, or hands a step
+  back to SGLang's own code before any launch and logs why.
+
+Kimi K3.1's DFlash round is the reference. #77, with sgl-project/sglang#51676,
+moved it out of SGLang's DFlash worker into `kimi_k31/dflash/`; SGLang kept one
+binding module (`kernel_plugins/nvidia/kimi_k31_dflash_binding.py`) and calls
+`decode_round`, which runs the whole round or returns `None` so SGLang runs its
+own. #78 decides what the round serves from what the build offers.
+
+Small optimizations are usually general, so they go straight to SGLang as
+ordinary SGLang PRs and are extended to most setups, megakernel or not, rather
+than kept on the megakernel path. Turn them on wherever they apply instead of
+behind a switch.
+
+The cost of this split: SGLang cannot see the code behind its bindings, so an
+SGLang change can break this package without failing SGLang's own CI. The
+contract tests and the E2E runs on SGLang `main` are what catch it; keep both
+current with every change. The split is accepted because it keeps SGLang `main`
+readable.
 
 ### Across SGLang and this repository
 
@@ -150,7 +194,7 @@ When a setup cannot run the path:
 - Never weaken an assertion, loosen a tolerance or change a baseline to make a
   test pass. Find the cause.
 
-## 3. Testing and CI
+## 3. CI test guide
 
 A change is covered by unit tests and E2E tests only. Do not add tests under
 `test/kernels/`: those are legacy standalone kernel tests outside CI. A kernel
