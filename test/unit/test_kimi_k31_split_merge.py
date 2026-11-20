@@ -380,51 +380,38 @@ class K31DFlashRuntimeRound(unittest.TestCase):
 
 
 class K31DFlashRuntimeGuard(unittest.TestCase):
-    """SGLang's guard (sglang.srt.speculative.dflash_binding) against the runtime's
-    declared exports and invariants, on the measured server arguments (G0/G2: TP16,
-    page 64, block 8, FP8 draft KV, draft window 1024, decode graph bs [1])."""
+    """SGLang's guard (sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding) against
+    the runtime's declared exports and invariants, on the measured server arguments
+    (G0/G2: TP16, page 64, block 8, FP8 draft KV, draft window 1024, decode graph bs
+    [1]) and on setups it does not serve."""
+
+    PATH = "sgl_nvidia_mega.kimi_k31.dflash.runtime:K31DFlashRuntime"
 
     def setUp(self):
         try:
-            from sglang.srt.speculative import dflash_binding
+            from sglang.srt.kernel_plugins.nvidia import kimi_k31_dflash_binding
         except ImportError:
             self.skipTest("this SGLang has no DFlash runtime binding")
         from sglang.srt.kernel_plugins.nvidia import binding
-        from sglang.srt.model_executor.cuda_graph_config import (
-            default_cuda_graph_config,
-            with_phase,
-        )
-        from sglang.srt.runtime_context import get_parallel, publish, reset_context
-        from sglang.srt.server_args import ServerArgs
+        from sglang.srt.runtime_context import get_parallel, reset_context
 
         from sgl_nvidia_mega.kimi_k31.dflash.runtime import K31DFlashRuntime
 
-        self.guard, self.runtime = dflash_binding, K31DFlashRuntime
-        publish(
-            ServerArgs(
-                model_path="dummy",
-                tp_size=16,
-                page_size=64,
-                kv_cache_dtype="fp8_e4m3",
-                speculative_algorithm="DFLASH",
-                speculative_num_draft_tokens=8,
-                speculative_draft_kv_cache_dtype="fp8_e4m3",
-                speculative_draft_window_size=1024,
-                cuda_graph_config=with_phase(
-                    default_cuda_graph_config(), "decode", bs=[1]
-                ),
-            ),
-            role="test",
-        )
+        self.guard, self.runtime = kimi_k31_dflash_binding, K31DFlashRuntime
         self.addCleanup(reset_context)
+        self._publish()
         for patched in (
             get_parallel().override(tp_rank=0),
-            patch.object(dflash_binding, "is_cuda", return_value=True),
-            patch.object(dflash_binding, "mambaish_config", return_value=object()),
+            patch.object(self.guard, "is_cuda", return_value=True),
+            patch.object(self.guard, "mambaish_config", return_value=object()),
             patch.object(binding, "_gather_tp", side_effect=lambda v, group=None: [v]),
+            patch.object(self.guard, "built_megakernel"),
         ):
             patched.__enter__()
             self.addCleanup(patched.__exit__, None, None, None)
+        self.guard.built_megakernel.return_value = types.SimpleNamespace(
+            dflash_runtime=self.PATH
+        )
         config = types.SimpleNamespace(dtype=torch.bfloat16)
         self.worker = types.SimpleNamespace(
             model_runner=types.SimpleNamespace(model_config=config),
@@ -445,12 +432,52 @@ class K31DFlashRuntimeGuard(unittest.TestCase):
             _use_aux_graph=True,
         )
 
-    def test_the_measured_setup_passes_and_any_other_is_named(self):
-        path = "sgl_nvidia_mega.kimi_k31.dflash.runtime:K31DFlashRuntime"
-        self.guard.check_dflash_runtime(self.runtime, self.worker, path)
+    def _publish(self, tp_size=16, graph_bs=(1,)):
+        from sglang.srt.model_executor.cuda_graph_config import (
+            default_cuda_graph_config,
+            with_phase,
+        )
+        from sglang.srt.runtime_context import publish
+        from sglang.srt.server_args import ServerArgs
+
+        publish(
+            ServerArgs(
+                model_path="dummy",
+                tp_size=tp_size,
+                page_size=64,
+                kv_cache_dtype="fp8_e4m3",
+                speculative_algorithm="DFLASH",
+                speculative_num_draft_tokens=8,
+                speculative_draft_kv_cache_dtype="fp8_e4m3",
+                speculative_draft_window_size=1024,
+                enable_nvidia_megakernel=True,
+                cuda_graph_config=with_phase(
+                    default_cuda_graph_config(), "decode", bs=list(graph_bs)
+                ),
+            ),
+            role="test",
+        )
+
+    def test_the_measured_setup_is_served_and_any_other_is_named(self):
+        self.assertEqual(
+            self.guard.check_dflash_runtime(self.runtime, self.worker, self.PATH), []
+        )
         self.worker.block_size = 5
         self.worker._use_aux_graph = False
-        with self.assertRaisesRegex(
-            RuntimeError, r"aux_graph is False .*block_size is 5 .*expected 8"
-        ):
-            self.guard.check_dflash_runtime(self.runtime, self.worker, path)
+        unserved = self.guard.check_dflash_runtime(self.runtime, self.worker, self.PATH)
+        self.assertEqual([m.split()[0] for m in unserved], ["aux_graph", "block_size"])
+        self.assertRegex(unserved[1], r"block_size is 5 .*expected 8")
+
+    def test_tp8_or_wider_decode_graphs_decline_to_sglangs_round(self):
+        """Setups that ran SGLang's stock DFlash round beside the target megakernel
+        before the runtime existed must still start, with one warning."""
+        for tp_size, graph_bs, key in ((8, (1,), "tp_size"), (16, (1, 2, 4), "decode")):
+            with self.subTest(tp_size=tp_size, graph_bs=graph_bs):
+                self._publish(tp_size=tp_size, graph_bs=graph_bs)
+                with self.assertLogs(self.guard.logger, "WARNING") as logs:
+                    bound = self.guard.bind_dflash_runtime(self.worker, None)
+                self.assertIsNone(bound)
+                (warning,) = logs.output
+                self.assertIn("does not serve this DFLASH setup", warning)
+                self.assertIn(f"{key}", warning)
+                self.assertIn("DFlash phases run stock", warning)

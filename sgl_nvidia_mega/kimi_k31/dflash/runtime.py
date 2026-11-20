@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
 """The DFlash runtime of the Kimi K3.1 target (``BuiltK31Verify.dflash_runtime``).
 
-SGLang binds it to its DFlash worker through ``sglang.srt.speculative.dflash_binding``
+SGLang's DFlash worker binds it through ``sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding``
 and hands it three whole phases; it subclasses nothing of SGLang's:
 
 * ``__init__(binding, built)``: the end of the worker's ``__init__``, before the KV pools
@@ -20,8 +20,9 @@ and hands it three whole phases; it subclasses nothing of SGLang's:
   then runs its own round. Every condition is the same on every rank.
 
 It reads the worker only through the binding's exports (``exports``) and states the
-setup it serves as SGLang guard values (``invariants``); SGLang refuses any other
-setup at startup, naming the mismatch. The round is SGLang's stock round (b1b3173c7c's
+setup it serves as SGLang guard values (``invariants``); on any other setup SGLang
+declines it at startup (one warning naming each mismatch) and runs its stock DFlash
+round beside the target megakernel. The round is SGLang's stock round (b1b3173c7c's
 DFlashRuntime steps with 20c91c3/9f1bb9f's overrides) specialized to that setup.
 """
 
@@ -139,9 +140,9 @@ SGLANG_MOVED = {
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._maybe_megakernel_aux": "092aaae84c5d6358",
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._can_megakernel_sample": "b4b2f0926f05c18f",
 }
-# What this runtime pulls from SGLang's DFlash worker (dflash_binding.EXPORTS) and the
-# guard values it serves (dflash_binding.GUARD); test/unit/test_contract.py pins both
-# against SGLang's binding.
+# What this runtime pulls from SGLang's DFlash worker (kimi_k31_dflash_binding.EXPORTS)
+# and the guard values it serves (kimi_k31_dflash_binding.GUARD);
+# test/unit/test_contract.py pins both against SGLang's binding.
 DFLASH_RUNTIME_API = 1
 DFLASH_EXPORTS = frozenset(
     {
@@ -165,8 +166,8 @@ DFLASH_EXPORTS = frozenset(
     }
 )
 # The measured setup: TP16 GB300, B1 x 8 rows, selector sampling, compact draft window,
-# FP8 draft KV, KDA target. Anything else runs SGLang's stock round
-# (K31MK_DFLASH_RUNTIME=0) or is refused at startup.
+# FP8 draft KV, KDA target. SGLang declines the runtime on any other setup (e.g. TP8,
+# decode graph bs [1, 2, 4]) and runs its stock round; K31MK_DFLASH_RUNTIME=0 always does.
 DFLASH_INVARIANTS = {
     "platform": "cuda",
     "tp_size": 16,

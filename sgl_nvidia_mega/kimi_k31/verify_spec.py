@@ -101,8 +101,8 @@ class BuiltK31Verify:
     speculative_runtime_hooks = None
     # The DFlash runtime (SGLang's SupportsDFlashRuntime), by "module:attribute": SGLang's
     # DFlash worker imports it at its start (not when SGLang loads this spec), checks it
-    # against SGLang's guard (sglang.srt.speculative.dflash_binding) and builds it with this
-    # target. It calls the phase methods below (prepare_sampled_accept, sampled_accept_fits,
+    # against SGLang's guard (sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding) and
+    # builds it with this target, or declines it for a setup it does not serve. It calls the phase methods below (prepare_sampled_accept, sampled_accept_fits,
     # sampled_accept, kda_commit_enabled, kda_commit). K31MK_DFLASH_RUNTIME=0 names none:
     # SGLang's stock DFlash round then runs beside the target megakernel.
     dflash_runtime = (

@@ -489,9 +489,9 @@ def test_code_moved_from_sglang_matches_while_sglang_keeps_it(path, key, digest)
     )
 
 
-# SGLang's DFlash binding (sglang.srt.speculative.dflash_binding): an SGLang without it
+# SGLang's DFlash binding (sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding): an SGLang without it
 # never builds BuiltK31Verify.dflash_runtime, so the runtime's pins are skipped there.
-DFLASH_BINDING = "srt/speculative/dflash_binding.py"
+DFLASH_BINDING = "srt/kernel_plugins/nvidia/kimi_k31_dflash_binding.py"
 NO_DFLASH_BINDING = f"this SGLang has no DFlash runtime binding ({DFLASH_BINDING})"
 
 
