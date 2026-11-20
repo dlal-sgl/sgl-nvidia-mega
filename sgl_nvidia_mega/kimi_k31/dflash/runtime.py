@@ -19,7 +19,7 @@ and hands it three whole phases; it subclasses nothing of SGLang's:
   top-k/top-p, adjusted logits, sampling masks, a batch size off its graphs); SGLang
   then runs its own round. Every condition is the same on every rank.
 
-It reads the worker only through the binding's exports (``exports``) and states the
+It reads the worker only through the names it binds (``bindings``) and states the
 setup it serves as SGLang guard values (``guards``); on any other setup SGLang
 declines it at startup (one warning naming each mismatch) and runs its stock DFlash
 round beside the target megakernel. The round is SGLang's stock round (b1b3173c7c's
@@ -140,10 +140,10 @@ SGLANG_MOVED = {
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._maybe_megakernel_aux": "092aaae84c5d6358",
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._can_megakernel_sample": "b4b2f0926f05c18f",
 }
-# What this runtime pulls from SGLang's DFlash worker (kimi_k31_dflash_binding.EXPORTS)
+# What this runtime pulls from SGLang's DFlash worker (kimi_k31_dflash_binding.BINDINGS)
 # and the guard values it serves (kimi_k31_dflash_binding.GUARDS);
 # test/unit/test_contract.py pins both against SGLang's binding.
-DFLASH_EXPORTS = frozenset(
+DFLASH_BINDINGS = frozenset(
     {
         "block_size",
         "device",
@@ -203,7 +203,7 @@ logger = logging.getLogger(__name__)
 class K31DFlashRuntime(AuxGraphs, KdaCommit):
     """One per DFlash worker, over the target's ``BuiltK31Verify``."""
 
-    exports = DFLASH_EXPORTS
+    bindings = DFLASH_BINDINGS
     guards = DFLASH_GUARDS
 
     def __init__(self, binding: Any, built: Any) -> None:
