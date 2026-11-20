@@ -15,6 +15,47 @@ covers. Every other step runs SGLang's own code.
 
 ## 1. Dev guide
 
+### What goes where
+
+The megakernels so far have needed three kinds of change:
+
+1. **The model's forward and its kernels:** the covered step itself, the fused
+   kernels it runs and the build that prepares them.
+2. **Speculative decoding:** the target-verify and draft rounds of DFlash,
+   DSpark and MTP, the accepts and commits around them, and their kernels.
+3. **Small optimizations:** improvements to the scheduler, PD disaggregation,
+   HiCache, CUDA graph capture and replay, or an isolated fusion or removed
+   copy, useful beyond one model's megakernel.
+
+This repository holds the first two. They are large, model-specific and change
+often; inside SGLang they would make the shared model and speculative code hard
+to read, and every SGLang change would have to keep them working. So they live
+here, and SGLang keeps only a binding:
+
+- **Binding:** SGLang defines the whole-phase entry points it calls and the
+  names the package may read; the package declares what it uses and the
+  contract tests check both sides.
+- **Guard:** the package decides from what its build offers whether it serves a
+  setup or a step: it refuses an unservable setup at startup, or hands a step
+  back to SGLang's own code before any launch and logs why.
+
+Kimi K3.1's DFlash round is the reference. #77, with sgl-project/sglang#51676,
+moved it out of SGLang's DFlash worker into `kimi_k31/dflash/`; SGLang kept one
+binding module (`kernel_plugins/nvidia/kimi_k31_dflash_binding.py`) and calls
+`decode_round`, which runs the whole round or returns `None` so SGLang runs its
+own. #78 decides what the round serves from what the build offers.
+
+Small optimizations are usually general, so they go straight to SGLang as
+ordinary SGLang PRs and are extended to most setups, megakernel or not, rather
+than kept on the megakernel path. Turn them on wherever they apply instead of
+behind a switch.
+
+The cost of this split: SGLang cannot see the code behind its bindings, so an
+SGLang change can break this package without failing SGLang's own CI. The
+contract tests and the E2E runs on SGLang `main` are what catch it; keep both
+current with every change. The split is accepted because it keeps SGLang `main`
+readable.
+
 ### Where code goes
 
 - One package per model, `sgl_nvidia_mega/<model>/`, usually with `spec.py`
@@ -30,8 +71,6 @@ covers. Every other step runs SGLang's own code.
   it there. The duplication is accepted: each architecture can then be tuned,
   rewritten or removed without touching the other. The step code chooses the
   directory by the device's architecture once, at build.
-- Whether a change belongs in this package or in SGLang: see
-  [What goes where](#what-goes-where) in the contribution guide.
 - Do not patch SGLang internals from this package. Hooks into SGLang's own
   forward go through its `HookRegistry`.
 
@@ -114,47 +153,6 @@ When a setup cannot run the path:
   PR, not in comments.
 
 ## 2. Contribution guide
-
-### What goes where
-
-The megakernels so far have needed three kinds of change:
-
-1. **The model's forward and its kernels:** the covered step itself, the fused
-   kernels it runs and the build that prepares them.
-2. **Speculative decoding:** the target-verify and draft rounds of DFlash,
-   DSpark and MTP, the accepts and commits around them, and their kernels.
-3. **Small optimizations:** improvements to the scheduler, PD disaggregation,
-   HiCache, CUDA graph capture and replay, or an isolated fusion or removed
-   copy, useful beyond one model's megakernel.
-
-This repository holds the first two. They are large, model-specific and change
-often; inside SGLang they would make the shared model and speculative code hard
-to read, and every SGLang change would have to keep them working. So they live
-here, and SGLang keeps only a binding:
-
-- **Binding:** SGLang defines the whole-phase entry points it calls and the
-  names the package may read; the package declares what it uses and the
-  contract tests check both sides.
-- **Guard:** the package decides from what its build offers whether it serves a
-  setup or a step: it refuses an unservable setup at startup, or hands a step
-  back to SGLang's own code before any launch and logs why.
-
-Kimi K3.1's DFlash round is the reference. #77, with sgl-project/sglang#51676,
-moved it out of SGLang's DFlash worker into `kimi_k31/dflash/`; SGLang kept one
-binding module (`kernel_plugins/nvidia/kimi_k31_dflash_binding.py`) and calls
-`decode_round`, which runs the whole round or returns `None` so SGLang runs its
-own. #78 decides what the round serves from what the build offers.
-
-Small optimizations are usually general, so they go straight to SGLang as
-ordinary SGLang PRs and are extended to most setups, megakernel or not, rather
-than kept on the megakernel path. Turn them on wherever they apply instead of
-behind a switch.
-
-The cost of this split: SGLang cannot see the code behind its bindings, so an
-SGLang change can break this package without failing SGLang's own CI. The
-contract tests and the E2E runs on SGLang `main` are what catch it; keep both
-current with every change. The split is accepted because it keeps SGLang `main`
-readable.
 
 ### Across SGLang and this repository
 
