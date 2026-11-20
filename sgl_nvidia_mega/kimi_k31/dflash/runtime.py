@@ -2,18 +2,19 @@
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
 """The DFlash runtime of the Kimi K3.1 target (``BuiltK31Verify.dflash_runtime``).
 
-SGLang's DFlash worker binds it through ``sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding``
-and hands it three whole phases; it subclasses nothing of SGLang's:
+SGLang's DFlash worker binds it through
+``sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding`` and hands it three whole
+phases:
 
 * ``__init__(binding, built)``: the end of the worker's ``__init__``, before the KV pools
-  are sized (the sampled accept's build comes out of the KV budget). Collective.
+  are sized, so the sampled accept's build comes out of the KV budget. Collective.
 * ``draft_sampler(lm_head)``: before the draft cuda graph captures, the megakernel head
-  folded into it (stage 2a). Collective.
+  that proposes inside it. Collective.
 * ``decode_round(batch, ...)``: the whole decode round, on every target TP rank:
 
       draft graph replay (MK chain + head) -> target verify graph -> sampled accept on
-      the kept vocab shard (or the greedy accept on its argmax) -> simulated acceptance
-      -> KDA commit -> publish -> aux graph (main stream)
+      the kept vocab shard (or SGLang's greedy accept on its argmax) -> simulated
+      acceptance -> KDA commit -> publish -> aux graph (main stream)
 
   It returns None, launching nothing, for a round it does not serve (grammar, logprobs,
   top-k/top-p, adjusted logits, sampling masks, a batch size off its graphs); SGLang
@@ -22,14 +23,13 @@ and hands it three whole phases; it subclasses nothing of SGLang's:
 It reads the worker only through the names it binds (``bindings``) and states the
 setup it serves as SGLang guard values (``guards``); on any other setup SGLang
 declines it at startup (one warning naming each mismatch) and runs its stock DFlash
-round beside the target megakernel. The round is SGLang's stock round (b1b3173c7c's
-DFlashRuntime steps with 20c91c3/9f1bb9f's overrides) specialized to that setup.
+round beside the target megakernel.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 import torch
 from sglang.kernels.ops.memory.small_copy import try_small_copy
@@ -130,8 +130,9 @@ SGLANG_READS = {
 }
 # SGLang code moved here (test/unit/test_contract.py): while SGLang still defines it,
 # its digest must match. _arm_plain_deferral and _prepare_megakernel_sampled_accept are
-# copies (the deferral refusal is a guard key now); the head attach, the aux offer and
-# the sampled-accept gate are specialized into draft_sampler, __init__ and _serves.
+# copies (the deferral refusal is the defer_plain_gather_refused guard); the head
+# attach, the aux offer and the sampled-accept gate are specialized into draft_sampler,
+# __init__ and _serves.
 SGLANG_MOVED = {
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._prepare_megakernel_sampled_accept": "f1c3d06541d47fdf",
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._plain_deferral_refused": "a926ed410dfdf354",
@@ -200,7 +201,20 @@ DFLASH_GUARDS = {
 logger = logging.getLogger(__name__)
 
 
-class K31DFlashRuntime(AuxGraphs, KdaCommit):
+class _DraftBlock(NamedTuple):
+    """One round's draft block, written by the draft and read by the verify and aux."""
+
+    prefix_lens: torch.Tensor  # [bs], the committed lengths (batch.seq_lens)
+    block_ids: torch.Tensor  # [bs, block]: the bonus token, then mask ids
+    positions: torch.Tensor  # [bs * block]
+    verify_out_cache_loc: torch.Tensor  # [bs * block], the verify's KV slots
+    verify_out_cache_loc_2d: torch.Tensor  # [bs, block], the same slots
+    draft_tokens: torch.Tensor  # [bs, block], filled by _draft
+    iteration_ids: Any  # the target runner's plan of this round's slots
+    forward_batch: ForwardBatch  # the draft forward's
+
+
+class K31DFlashRuntime:
     """One per DFlash worker, over the target's ``BuiltK31Verify``."""
 
     bindings = DFLASH_BINDINGS
@@ -228,23 +242,19 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
         self._rebuild_compact_draft_cache = pull("rebuild_compact_draft_cache")
         self._accept_block = pull("accept_block")
         self._binding = binding
-        # bound by draft_sampler, before the draft graph captures
+        # set by draft_sampler, before the draft graph captures
         self._sampler = None
         self._draft_runner = None
+        self._aux = None
+        self._kda = None
         self._round_bs = frozenset()
         self._embed_module = None
         self._block_bufs = None
-        self._megakernel_aux_graphs = {}
-        self._megakernel_aux_caches = None
-        # Megakernel mailbox slot of the aux: alternates on every call, eager or replayed,
-        # in the same order on every rank.
-        self._aux_parity = 0
-        self._kda_commit_buffers = None
         draft_built = built_megakernel(self.draft_model)
-        self._draft = NO_DRAFT_CHAIN
+        self._draft_chain = NO_DRAFT_CHAIN
         if any(chain is draft_built for chain in DRAFT_CHAINS):
-            self._draft = draft_built
-        draft = self._draft
+            self._draft_chain = draft_built
+        draft = self._draft_chain
         # Ranks that differ would wait in different collectives below.
         megakernel_agree(
             (
@@ -255,9 +265,9 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             ),
             what="DFlash draft chain offers",
         )
-        self._megakernel_aux = offered(draft, draft.draft_aux_rows)
+        self._aux_chain = offered(draft, draft.draft_aux_rows)
         _require(
-            self._megakernel_aux is not None,
+            self._aux_chain is not None,
             "the draft is not on the megakernel chain, or its aux is off "
             "(SGLANG_K31_DRAFT_MK, SGLANG_K31_DRAFT_MK_AUX)",
         )
@@ -268,8 +278,6 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
         )
         # Fixed at build (K31MK_KDA_COMMIT).
         _require(built.kda_commit_enabled, "the KDA commit is off (K31MK_KDA_COMMIT)")
-        self._megakernel_kda = built
-        self._kda_confirmed = True
         self._megakernel_sampled = self._prepare_megakernel_sampled_accept()
         _require(
             self._megakernel_sampled is not None,
@@ -280,7 +288,7 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             logger.info(
                 "DFLASH aux append runs on the NVIDIA megakernel for rows %s, "
                 "on the main stream",
-                list(self._megakernel_aux.draft_aux_rows),
+                list(self._aux_chain.draft_aux_rows),
             )
 
     # ---- init phases
@@ -331,12 +339,20 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             self._draft_runner.runner_ids.space(IdSpaceKind.SLIDING_WINDOW) is None,
             "the draft KV pool has a sliding-window sub-pool",
         )
-        self._draft_kv_pool = self._draft_runner.token_to_kv_pool
-        self._target_attn_backend = self._target_worker.model_runner.attn_backend
+        self._aux = AuxGraphs(
+            megakernel_aux=self._aux_chain,
+            draft_model=self.draft_model,
+            draft_kv_pool=self._draft_runner.token_to_kv_pool,
+        )
+        self._kda = KdaCommit(
+            megakernel_kda=self._target,
+            target_attn_backend=self._target_worker.model_runner.attn_backend,
+            device=self.device,
+        )
         self._embed_module = unwrap_lora_layer(
             _resolve_dflash_embedding_module(self.draft_model, self._target_model)
         )
-        head = offered(self._draft, self._draft.draft_head_requests)
+        head = offered(self._draft_chain, self._draft_chain.draft_head_requests)
         graph_bs = set(get_exec().graph.cuda_graph_config.decode.bs)
         _require(
             head is not None
@@ -345,7 +361,7 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             f"the megakernel head does not serve the decode graphs {sorted(graph_bs)} "
             "with sampling (SGLANG_K31_DRAFT_MK_HEAD)",
         )
-        rows = set(self._megakernel_aux.draft_aux_rows)
+        rows = set(self._aux_chain.draft_aux_rows)
         self._round_bs = frozenset(
             bs for bs in graph_bs if bs * int(self.block_size) in rows
         )
@@ -408,6 +424,29 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             and self._megakernel_sampled.sampled_accept_fits(bs)
         )
 
+    def _round(self, batch, sampling_info, *, bs, sampled, on_publish):
+        """Every step launches on the current stream, in this order, on every rank."""
+        # `seq_lens` is carried over from the previous overlap iteration and may have been
+        # produced on another stream.
+        batch.seq_lens.record_stream(
+            torch.get_device_module(self.device).current_stream()
+        )
+        block = self._prepare_block(batch, bs=bs)
+        selector_sample = self._draft(block, sampling_info, bs=bs, sampled=sampled)
+        target_out, seq_lens_pre_verify = self._verify(batch, block)
+        logits_output = target_out.logits_output
+        _, commit_lens, bonus, out_tokens, new_seq_lens = self._accept(
+            batch, block, logits_output, sampling_info, selector_sample, bs=bs
+        )
+        new_seq_lens = self._commit(
+            batch, block, seq_lens_pre_verify, commit_lens, new_seq_lens
+        )
+        # Before the aux: the next round's host reads the lengths without waiting on it.
+        if on_publish is not None:
+            on_publish(new_seq_lens)
+        self._append_aux(block, logits_output, commit_lens, bs=bs)
+        return self._result(target_out, out_tokens, commit_lens, bonus, new_seq_lens)
+
     def _block_buffers(self, bs: int) -> tuple:
         bufs = self._block_bufs
         if bufs is None or bufs[0].shape[0] < bs:
@@ -422,17 +461,12 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             )
         return tuple(buf[:bs] for buf in bufs)
 
-    def _round(self, batch, sampling_info, *, bs, sampled, on_publish):
-        # -- begin_round
-        # `seq_lens` is carried over from the previous overlap iteration and may have been
-        # produced on another stream.
-        batch.seq_lens.record_stream(
-            torch.get_device_module(self.device).current_stream()
-        )
+    def _prepare_block(self, batch, *, bs) -> _DraftBlock:
+        """The draft block's ids, positions, verify slots and embeddings, the draft's
+        compact KV table, and the draft forward's batch."""
         device = self.device
         draft_input = batch.spec_info
         target_runner = self._target_worker.model_runner
-        # -- build_block
         block_size = int(self.block_size)
         block_ids, positions_2d, verify_out_cache_loc_2d, draft_tokens, seq_lens_cpu = (
             self._block_buffers(bs)
@@ -448,12 +482,10 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             cache_loc_out=verify_out_cache_loc_2d,
             mask_token_id=int(self._mask_token_id),
         )
-        # -- embed_block
         noise_embedding = self._embed_module(block_ids)
         if self._noise_embed_scale != 1.0:
             noise_embedding = noise_embedding * self._noise_embed_scale
         input_embeds = noise_embedding.view(-1, noise_embedding.shape[-1])
-        # -- plan_draft
         positions = positions_2d.reshape(-1)
         verify_out_cache_loc = verify_out_cache_loc_2d.reshape(-1)
         iteration_ids = target_runner.runner_ids.plan(
@@ -514,7 +546,22 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             read_extent=block_size,
         )
         draft_plan.bind(forward_batch, draft_translator)
-        # -- draft
+        return _DraftBlock(
+            prefix_lens=prefix_lens,
+            block_ids=block_ids,
+            positions=positions,
+            verify_out_cache_loc=verify_out_cache_loc,
+            verify_out_cache_loc_2d=verify_out_cache_loc_2d,
+            draft_tokens=draft_tokens,
+            iteration_ids=iteration_ids,
+            forward_batch=forward_batch,
+        )
+
+    def _draft(self, block: _DraftBlock, sampling_info, *, bs, sampled):
+        """The draft graph (megakernel chain + head) proposes the block into
+        ``block.draft_tokens``; returns the selector's (candidate ids, q rows) for a
+        sampled batch, else None."""
+        block_size = int(self.block_size)
         sampler = self._sampler
         # Consumed by the in-graph sample; must be staged before the replay.
         sampler.stage_sampling_params(bs=bs, sampling_info=sampling_info)
@@ -522,13 +569,14 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             torch.inference_mode(),
             draft_tp_context(self._draft_parallel_layout),
         ):
-            draft_out = self._draft_runner.forward(forward_batch)
+            draft_out = self._draft_runner.forward(block.forward_batch)
         if not draft_out.can_run_graph:
             raise RuntimeError(f"K3.1 DFlash runtime: the draft ran eager at bs={bs}")
         draft_next = sampler.out[: bs * (block_size - 1)].view(bs, block_size - 1)
         selector_sample = (
             (sampler.candidate_out[:bs], sampler.q_out[:bs]) if sampled else None
         )
+        draft_tokens, block_ids = block.draft_tokens, block.block_ids
         if not (
             bs == 1
             and self._batched_small_copy
@@ -538,16 +586,22 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
         ):
             draft_tokens[:, 0].copy_(block_ids[:, 0])
             draft_tokens[:, 1:].copy_(draft_next)
-        # -- verify
+        return selector_sample
+
+    def _verify(self, batch, block: _DraftBlock) -> tuple:
+        """The target verify graph over the drafted block: (its output, the committed
+        lengths before it)."""
+        block_size = int(self.block_size)
+        draft_input = batch.spec_info
         verify_input = DFlashVerifyInput(
-            draft_token=draft_tokens.reshape(-1),
-            positions=positions,
+            draft_token=block.draft_tokens.reshape(-1),
+            positions=block.positions,
             draft_token_num=block_size,
             custom_mask=None,
             capture_hidden_mode=CaptureHiddenMode.FULL,
-            iteration_ids=iteration_ids,
+            iteration_ids=block.iteration_ids,
         )
-        batch.out_cache_loc = verify_out_cache_loc
+        batch.out_cache_loc = block.verify_out_cache_loc
         seq_lens_pre_verify = batch.seq_lens.clone()
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
@@ -570,82 +624,14 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
             is_verify=True,
             skip_attn_backend_init=True,
         )
-        logits_output = target_out.logits_output
-        # -- resolve_verify_logits + accept_tokens
-        accept_len, commit_lens, bonus, out_tokens, new_seq_lens = self._accept(
-            batch,
-            sampling_info,
-            logits_output=logits_output,
-            selector_sample=selector_sample,
-            draft_tokens=draft_tokens,
-            prefix_lens=prefix_lens,
-            bs=bs,
-        )
-        # -- commit
-        if new_seq_lens is None:
-            new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
-        _require(
-            self._megakernel_kda_commit(
-                batch=batch,
-                seq_lens_pre_verify=seq_lens_pre_verify,
-                commit_lens=commit_lens,
-            ),
-            "the KDA commit declined the target's recurrent state",
-        )
-        # -- publish
-        if on_publish is not None:
-            on_publish(new_seq_lens)
-        # -- append_aux
-        hidden = logits_output.hidden_states
-        if hidden is None:
-            raise RuntimeError(
-                "DFLASH verify requires target hidden states, but got None."
-            )
-        hidden = hidden.view(bs, block_size, -1)
-        # Consume in this step: every decode graph size shares one aux output,
-        # which the next target forward overwrites (resolve_aux_hidden_states_width).
-        cache_loc = iteration_ids.write_ids(draft_translator)
-        self._append_target_hidden_megakernel(
-            target_hidden=hidden.reshape(-1, hidden.shape[-1]),
-            positions=positions,
-            cache_loc=cache_loc,
-            cache_loc_2d=cache_loc.view(verify_out_cache_loc_2d.shape),
-            commit_lens=commit_lens,
-        )
-        # -- finish
-        # Avoid copying large hidden-state buffers to CPU in overlap scheduling.
-        logits_output.hidden_states = None
-        return GenerationBatchResult(
-            logits_output=logits_output,
-            next_token_ids=out_tokens.reshape(-1),
-            accept_lens=commit_lens,
-            can_run_cuda_graph=target_out.can_run_cuda_graph,
-            next_draft_input=make_draft_input_v2(
-                bonus_tokens=bonus, new_seq_lens=new_seq_lens
-            ),
-            side_stream_done=None,
-            speculative_num_draft_tokens=block_size,
-            new_seq_lens=new_seq_lens,
-            block_accept_lens=None,
-            cap_lens=None,
-            routed_experts_output=target_out.routed_experts_output,
-            indexer_topk_output=target_out.indexer_topk_output,
-            kv_weight_version_record=target_out.kv_weight_version_record,
-        )
+        return target_out, seq_lens_pre_verify
 
     def _accept(
-        self,
-        batch,
-        sampling_info,
-        *,
-        logits_output,
-        selector_sample,
-        draft_tokens,
-        prefix_lens,
-        bs,
+        self, batch, block, logits_output, sampling_info, selector_sample, *, bs
     ) -> tuple:
         """(accept_len, commit_lens, bonus, out_tokens, new_seq_lens or None) from the
         verify's vocab shard, which stays ungathered."""
+        draft_tokens, prefix_lens = block.draft_tokens, block.prefix_lens
         shard = logits_output.next_token_logits
         target_lp = self._target_logits_processor
         if not target_lp.is_deferred_shard(shard):
@@ -694,6 +680,64 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
                 new_seq_lens=new_seq_lens,
             )
         return accept_len, commit_lens, bonus, out_tokens, new_seq_lens
+
+    def _commit(self, batch, block, seq_lens_pre_verify, commit_lens, new_seq_lens):
+        """The KDA commit of the accepted recurrent state; returns the new lengths."""
+        prefix_lens = block.prefix_lens
+        if new_seq_lens is None:
+            new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
+        _require(
+            self._kda._megakernel_kda_commit(
+                batch=batch,
+                seq_lens_pre_verify=seq_lens_pre_verify,
+                commit_lens=commit_lens,
+            ),
+            "the KDA commit declined the target's recurrent state",
+        )
+        return new_seq_lens
+
+    def _append_aux(self, block: _DraftBlock, logits_output, commit_lens, *, bs):
+        """The committed rows' target hidden states into the draft KV: the aux graph,
+        replayed on the main stream (a collective)."""
+        block_size = int(self.block_size)
+        hidden = logits_output.hidden_states
+        if hidden is None:
+            raise RuntimeError(
+                "DFLASH verify requires target hidden states, but got None."
+            )
+        hidden = hidden.view(bs, block_size, -1)
+        # Consume in this step: every decode graph size shares one aux output,
+        # which the next target forward overwrites (resolve_aux_hidden_states_width).
+        cache_loc = block.iteration_ids.write_ids(self._draft_runner.runner_ids)
+        self._aux._append_target_hidden_megakernel(
+            target_hidden=hidden.reshape(-1, hidden.shape[-1]),
+            positions=block.positions,
+            cache_loc=cache_loc,
+            cache_loc_2d=cache_loc.view(block.verify_out_cache_loc_2d.shape),
+            commit_lens=commit_lens,
+        )
+
+    def _result(self, target_out, out_tokens, commit_lens, bonus, new_seq_lens):
+        logits_output = target_out.logits_output
+        # Avoid copying large hidden-state buffers to CPU in overlap scheduling.
+        logits_output.hidden_states = None
+        return GenerationBatchResult(
+            logits_output=logits_output,
+            next_token_ids=out_tokens.reshape(-1),
+            accept_lens=commit_lens,
+            can_run_cuda_graph=target_out.can_run_cuda_graph,
+            next_draft_input=make_draft_input_v2(
+                bonus_tokens=bonus, new_seq_lens=new_seq_lens
+            ),
+            side_stream_done=None,
+            speculative_num_draft_tokens=int(self.block_size),
+            new_seq_lens=new_seq_lens,
+            block_accept_lens=None,
+            cap_lens=None,
+            routed_experts_output=target_out.routed_experts_output,
+            indexer_topk_output=target_out.indexer_topk_output,
+            kv_weight_version_record=target_out.kv_weight_version_record,
+        )
 
 
 def _require(ok: bool, what: str) -> None:

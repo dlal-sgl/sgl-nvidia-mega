@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
-"""The post-verify KDA commit on the megakernel (stage 3b): SGLang's recurrent-state
-tensors, read from its hybrid linear-attention backend, handed to
-``BuiltK31Verify.kda_commit``. Moved from SGLang's dflash_worker_v2.py; ``batch`` is the
-round's ScheduleBatch."""
+"""The post-verify KDA commit on the megakernel: SGLang's recurrent-state tensors, read
+from its hybrid linear-attention backend, handed to ``BuiltK31Verify.kda_commit``;
+``batch`` is the round's ScheduleBatch."""
 
 from __future__ import annotations
 
@@ -63,9 +62,15 @@ SGLANG_MOVED = {
 
 
 class KdaCommit:
-    """``K31DFlashRuntime``'s KDA commit. Reads ``_target_attn_backend``, ``device`` and
-    ``_megakernel_kda`` (the target, whose commit switch is on); owns
-    ``_kda_confirmed`` and ``_kda_commit_buffers``."""
+    """The KDA commit of one DFlash worker: ``megakernel_kda`` is the target build (its
+    commit switch on), ``target_attn_backend`` the target runner's attention backend."""
+
+    def __init__(self, *, megakernel_kda, target_attn_backend, device) -> None:
+        self._megakernel_kda = megakernel_kda
+        self._target_attn_backend = target_attn_backend
+        self.device = device
+        self._kda_confirmed = True
+        self._kda_commit_buffers: Optional[Tuple[torch.Tensor, ...]] = None
 
     def _megakernel_kda_commit(
         self,

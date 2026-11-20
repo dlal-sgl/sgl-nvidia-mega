@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
-"""The DFlash decode aux append on the megakernel (stage 2b). Per (rows, slots) key, two
-CUDA graphs, one per mailbox parity, captured on a side stream and replayed on the main
-stream: the aux hop is a collective, so it keeps program order. Moved from SGLang's
-dflash_worker_v2.py; the draft KV pool is the draft runner's, which the runtime pulls."""
+"""The DFlash decode aux append on the megakernel. Per (rows, slots) key, two CUDA
+graphs, one per mailbox parity, captured on a side stream and replayed on the main
+stream: the aux hop is a collective, so it keeps program order. The draft KV pool is
+the draft runner's, which the runtime pulls."""
 
 from __future__ import annotations
 
@@ -41,9 +41,18 @@ logger = logging.getLogger(__name__)
 
 
 class AuxGraphs:
-    """``K31DFlashRuntime``'s aux graphs. Reads ``_megakernel_aux`` (the draft chain serving the
-    aux rows), ``draft_model`` and ``_draft_kv_pool``; owns ``_megakernel_aux_graphs``,
-    ``_megakernel_aux_caches`` and ``_aux_parity`` (which the opt-in tail shares)."""
+    """The aux graphs of one DFlash worker: ``megakernel_aux`` is the draft chain serving
+    the aux rows, ``draft_kv_pool`` the draft runner's KV pool."""
+
+    def __init__(self, *, megakernel_aux, draft_model, draft_kv_pool) -> None:
+        self._megakernel_aux = megakernel_aux
+        self.draft_model = draft_model
+        self._draft_kv_pool = draft_kv_pool
+        self._megakernel_aux_graphs = {}
+        self._megakernel_aux_caches = None
+        # Megakernel mailbox slot: alternates on every call, eager or replayed, in the
+        # same order on every rank.
+        self._aux_parity = 0
 
     def _take_aux_parity(self) -> int:
         slot, self._aux_parity = self._aux_parity, self._aux_parity ^ 1

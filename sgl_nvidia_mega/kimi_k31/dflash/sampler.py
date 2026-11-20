@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the SGLang project
 """The DFlash worker's draft sampler when the megakernel head proposes inside the draft
-forward (stage 2a). ``MegakernelSelectorDraftSampler`` is SGLang's
-``_MegakernelSelectorDraftSampler`` (dflash_worker_v2.py), moved unchanged."""
+forward: the head's static outputs, and the staging of its sampling parameters before
+each replay."""
 
 from __future__ import annotations
 
