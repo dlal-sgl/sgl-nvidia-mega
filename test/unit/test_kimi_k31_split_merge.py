@@ -348,7 +348,6 @@ class K31DFlashRuntimeRound(unittest.TestCase):
         cases = {
             "grammar": dict(has_grammar=True),
             "logprob": dict(return_logprob=True),
-            "eager draft": dict(can_run_decode_cuda_graph=False),
             "bs 2": dict(seq_lens=torch.tensor([5, 6])),
         }
         sampling = {
@@ -366,6 +365,22 @@ class K31DFlashRuntimeRound(unittest.TestCase):
                 out, published = self._round(runtime, batch)
                 self.assertIsNone(out)
                 self.assertEqual((self.calls, published), ([], []))
+
+    def test_the_decode_graph_flag_counts_only_under_mlp_sync(self):
+        """SGLang sets can_run_decode_cuda_graph only under MLP sync; without it the
+        flag stays False and the round still runs here."""
+        runtime = self._runtime()
+        for mlp_sync, served in ((False, True), (True, False)):
+            with (
+                self.subTest(mlp_sync=mlp_sync),
+                patch.object(self.rt, "require_mlp_sync", return_value=mlp_sync),
+            ):
+                batch = self._batch()
+                batch.can_run_decode_cuda_graph = False
+                del self.calls[:]
+                out, published = self._round(runtime, batch)
+                self.assertEqual(out is not None, served)
+                self.assertEqual(bool(self.calls), served)
 
     def test_init_refuses_what_the_round_does_not_serve(self):
         for name, change in {
