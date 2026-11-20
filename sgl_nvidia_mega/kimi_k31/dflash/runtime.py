@@ -250,6 +250,8 @@ class K31DFlashRuntime:
         self._kda = None
         self._round_bs = frozenset()
         self._declined = set()
+        # SGLang sets a batch's decode-graph flag only under MLP sync.
+        self._mlp_sync = require_mlp_sync()
         self._embed_module = None
         self._block_bufs = None
         draft_built = built_megakernel(self.draft_model)
@@ -419,8 +421,8 @@ class K31DFlashRuntime:
         """Why the round runs SGLang's way, or None; rank-uniform, before any launch."""
         if bs not in self._round_bs:
             return f"batch size {bs} off the round graphs"
-        # Set only under MLP sync; otherwise the draft graph runs whenever bs is captured.
-        if not batch.can_run_decode_cuda_graph and require_mlp_sync():
+        # Without MLP sync the draft graph runs whenever bs is captured.
+        if self._mlp_sync and not batch.can_run_decode_cuda_graph:
             return "no decode cuda graph under MLP sync"
         if batch.has_grammar:
             return "a grammar"
