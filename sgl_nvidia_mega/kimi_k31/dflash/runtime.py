@@ -80,6 +80,7 @@ SGLANG_READS = {
     "kernels/ops/memory/small_copy.py": ("try_small_copy",),
     "kernels/ops/speculative/dflash.py": ("_prepare_dflash_draft_block_unchecked",),
     "srt/kernel_plugins/nvidia/binding.py": ("built_megakernel", "megakernel_agree"),
+    "srt/layers/dp_attention.py": ("require_mlp_sync",),
     "srt/lora/layers.py": ("unwrap_lora_layer",),
     "srt/managers/utils.py": ("GenerationBatchResult",),
     "srt/mem_cache/kv/alloc/id_space.py": ("IdSpaceKind", "SLIDING_WINDOW"),
