@@ -40,6 +40,7 @@ from sglang.srt.kernel_plugins.nvidia.binding import (
     built_megakernel,
     megakernel_agree,
 )
+from sglang.srt.layers.dp_attention import require_mlp_sync
 from sglang.srt.lora.layers import unwrap_lora_layer
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.mem_cache.kv.alloc.id_space import IdSpaceKind
@@ -132,7 +133,7 @@ SGLANG_READS = {
 # its digest must match. _arm_plain_deferral and _prepare_megakernel_sampled_accept are
 # copies (the deferral refusal is the defer_plain_gather_refused guard); the head
 # attach, the aux offer and the sampled-accept gate are specialized into draft_sampler,
-# __init__ and _serves.
+# __init__ and _unserved.
 SGLANG_MOVED = {
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._prepare_megakernel_sampled_accept": "f1c3d06541d47fdf",
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._plain_deferral_refused": "a926ed410dfdf354",
@@ -248,6 +249,7 @@ class K31DFlashRuntime:
         self._aux = None
         self._kda = None
         self._round_bs = frozenset()
+        self._declined = set()
         self._embed_module = None
         self._block_bufs = None
         draft_built = built_megakernel(self.draft_model)
@@ -398,31 +400,44 @@ class K31DFlashRuntime:
         sampling_info = batch.sampling_info
         bs = len(batch.seq_lens)
         sampled = not _is_all_greedy(sampling_info)
-        if not self._serves(batch, sampling_info, bs=bs, sampled=sampled):
+        unserved = self._unserved(batch, sampling_info, bs=bs, sampled=sampled)
+        if unserved is not None:
+            if unserved not in self._declined:
+                self._declined.add(unserved)
+                if self._target_tp_rank == 0:
+                    logger.warning(
+                        "K3.1 DFlash runtime: a round with %s runs SGLang's round "
+                        "(logged once per reason)",
+                        unserved,
+                    )
             return None
         return self._round(
             batch, sampling_info, bs=bs, sampled=sampled, on_publish=on_publish
         )
 
-    def _serves(self, batch, sampling_info, *, bs: int, sampled: bool) -> bool:
-        """Rank-uniform, before any launch: the round runs here, on the draft graph."""
-        if (
-            bs not in self._round_bs
-            or not batch.can_run_decode_cuda_graph
-            or batch.has_grammar
-            or batch.return_logprob
-        ):
-            return False
+    def _unserved(self, batch, sampling_info, *, bs: int, sampled: bool):
+        """Why the round runs SGLang's way, or None; rank-uniform, before any launch."""
+        if bs not in self._round_bs:
+            return f"batch size {bs} off the round graphs"
+        # Set only under MLP sync; otherwise the draft graph runs whenever bs is captured.
+        if not batch.can_run_decode_cuda_graph and require_mlp_sync():
+            return "no decode cuda graph under MLP sync"
+        if batch.has_grammar:
+            return "a grammar"
+        if batch.return_logprob:
+            return "logprobs"
         if sampling_info is None:
-            return True
+            return None
         # Nor penalties, logit bias, custom processors or sampling masks.
         if not _verify_logits_unadjusted(sampling_info):
-            return False
-        return not sampled or (
-            not sampling_info.need_top_k_sampling
-            and not sampling_info.need_top_p_sampling
-            and self._megakernel_sampled.sampled_accept_fits(bs)
-        )
+            return "adjusted logits"
+        if not sampled:
+            return None
+        if sampling_info.need_top_k_sampling or sampling_info.need_top_p_sampling:
+            return "top-k/top-p"
+        if not self._megakernel_sampled.sampled_accept_fits(bs):
+            return "a sampled accept that does not fit"
+        return None
 
     def _round(self, batch, sampling_info, *, bs, sampled, on_publish):
         """Every step launches on the current stream, in this order, on every rank."""
