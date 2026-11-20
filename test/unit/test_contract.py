@@ -11,8 +11,8 @@ A module whose stock step mirrors an SGLang function lists it in ``SGLANG_MIRROR
 with the digest of its code, so a changed branch fails here too. Code moved out of
 SGLang into the package is listed in ``SGLANG_MOVED`` the same way: while SGLang still
 defines it, both copies must be the same code; once SGLang drops it, the pin retires.
-A DFlash runtime declares the worker exports it pulls (``DFLASH_EXPORTS``) and the
-guard values it serves (``DFLASH_GUARDS``); SGLang's DFlash binding must export and
+A DFlash runtime declares the worker names it binds (``DFLASH_BINDINGS``) and the
+guard values it serves (``DFLASH_GUARDS``); SGLang's DFlash binding must bind and
 guard each by name. A file that moved between SGLang versions is named newest first,
 ``"new.py|old.py"``; the first one present is checked. A read name such as
 "replication|layout" accepts either field.
@@ -517,20 +517,20 @@ def _strings(node: Optional[ast.expr]) -> frozenset:
 DFLASH_RUNTIMES = [
     path
     for path in sorted(PACKAGE.rglob("*.py"))
-    if _assigned(_tree(path), "DFLASH_EXPORTS") is not None
+    if _assigned(_tree(path), "DFLASH_BINDINGS") is not None
 ]
 
 
 @pytest.mark.parametrize("path", DFLASH_RUNTIMES, ids=_id)
-def test_the_dflash_binding_exports_and_guards_what_the_runtime_declares(path):
+def test_the_dflash_binding_binds_and_guards_what_the_runtime_declares(path):
     files = _files(DFLASH_BINDING)
     if not files:
         pytest.skip(f"{NO_DFLASH_BINDING}: {_id(path)}")
     binding, runtime = _tree(files[0]), _tree(path)
-    missing = _strings(_assigned(runtime, "DFLASH_EXPORTS")) - _strings(
-        _assigned(binding, "EXPORTS")
+    missing = _strings(_assigned(runtime, "DFLASH_BINDINGS")) - _strings(
+        _assigned(binding, "BINDINGS")
     )
-    assert not missing, f"{_id(path)}: SGLang does not export {sorted(missing)}"
+    assert not missing, f"{_id(path)}: SGLang does not bind {sorted(missing)}"
     unguarded = _strings(_assigned(runtime, "DFLASH_GUARDS")) - _strings(
         _assigned(binding, "GUARDS")
     )

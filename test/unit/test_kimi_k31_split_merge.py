@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
 
 class K31DFlashRuntimeRound(unittest.TestCase):
-    """The K3.1 DFlash runtime on CPU, over fakes of SGLang's worker exports and the
+    """The K3.1 DFlash runtime on CPU, over fakes of SGLang's worker bindings and the
     megakernel's target and draft chain: what it launches, in which order, and what it
     hands back to SGLang's stock round."""
 
@@ -153,7 +153,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             indexer_topk_output=None,
             kv_weight_version_record=None,
         )
-        self.exports = {
+        self.bindings = {
             "block_size": self.BLOCK,
             "device": "cpu",  # the worker holds the server arg
             "mask_token_id": 3,
@@ -233,9 +233,9 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             write_ids=lambda reader: torch.zeros(8, dtype=torch.int64),
         )
 
-    def _binding(self, exports=None):
-        exports = exports or self.exports
-        return types.SimpleNamespace(pull=lambda name: exports[name])
+    def _binding(self, bindings=None):
+        bindings = bindings or self.bindings
+        return types.SimpleNamespace(pull=lambda name: bindings[name])
 
     def _runtime(self):
         runtime = self.rt.K31DFlashRuntime(self._binding(), self.target)
@@ -287,7 +287,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             self.calls,
             [("agree", "DFlash draft chain offers"), "prepare_sampled", "attach_head"],
         )
-        self.assertTrue(self.exports["target_logits_processor"].defer_plain_gather)
+        self.assertTrue(self.bindings["target_logits_processor"].defer_plain_gather)
         self.assertEqual(runtime._round_bs, {1})
         self.assertEqual(runtime._draft_kv_pool, "draft pool")
 
@@ -381,7 +381,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
 
 class K31DFlashRuntimeGuard(unittest.TestCase):
     """SGLang's guard (sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding) against
-    the runtime's declared exports and guards, on the measured server arguments
+    the runtime's declared bindings and guards, on the measured server arguments
     (G0/G2: TP16, page 64, block 8, FP8 draft KV, draft window 1024, decode graph bs
     [1]) and on setups it does not serve."""
 
