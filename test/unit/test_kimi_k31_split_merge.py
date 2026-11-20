@@ -240,9 +240,9 @@ class K31DFlashRuntimeRound(unittest.TestCase):
     def _runtime(self):
         runtime = self.rt.K31DFlashRuntime(self._binding(), self.target)
         log = self.calls.append
-        runtime._megakernel_kda_commit = lambda **kw: log("kda_commit") or True
-        runtime._append_target_hidden_megakernel = lambda **kw: log("draft_aux")
         runtime.draft_sampler(lm_head="lm_head")
+        runtime._kda._megakernel_kda_commit = lambda **kw: log("kda_commit") or True
+        runtime._aux._append_target_hidden_megakernel = lambda **kw: log("draft_aux")
         return runtime
 
     def _batch(self, **sampling):
@@ -275,10 +275,13 @@ class K31DFlashRuntimeRound(unittest.TestCase):
 
     def _round(self, runtime, batch):
         published = []
+
+        def publish(new_seq_lens):
+            self.calls.append("publish")
+            published.append(new_seq_lens)
+
         with patch.object(torch.Tensor, "record_stream"):
-            out = runtime.decode_round(
-                batch, on_publish=published.append, grammar_barrier=None
-            )
+            out = runtime.decode_round(batch, on_publish=publish, grammar_barrier=None)
         return out, published
 
     def test_init_builds_the_sampled_accept_and_arms_the_deferral_before_capture(self):
@@ -289,7 +292,8 @@ class K31DFlashRuntimeRound(unittest.TestCase):
         )
         self.assertTrue(self.bindings["target_logits_processor"].defer_plain_gather)
         self.assertEqual(runtime._round_bs, {1})
-        self.assertEqual(runtime._draft_kv_pool, "draft pool")
+        self.assertEqual(runtime._aux._draft_kv_pool, "draft pool")
+        self.assertEqual(runtime._kda._target_attn_backend, "target attention")
 
     def test_a_sampled_round_runs_the_measured_order(self):
         runtime = self._runtime()
@@ -313,6 +317,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
                 "sampled_accept",
                 "simulate",
                 "kda_commit",
+                "publish",
                 "draft_aux",
             ],
         )
