@@ -108,6 +108,10 @@ class K31DFlashRuntimeRound(unittest.TestCase):
         from sgl_nvidia_mega.kimi_k31.dflash import runtime as rt
 
         self.rt, self.calls = rt, []
+        # No MLP sync unless a test says so (SGLang reads it from the parallel config).
+        mlp_sync = patch.object(rt, "require_mlp_sync", return_value=False)
+        mlp_sync.start()
+        self.addCleanup(mlp_sync.stop)
         log = self.calls.append
         self.chain = types.SimpleNamespace(
             draft_aux_rows=(self.BLOCK,),
@@ -369,12 +373,12 @@ class K31DFlashRuntimeRound(unittest.TestCase):
     def test_the_decode_graph_flag_counts_only_under_mlp_sync(self):
         """SGLang sets can_run_decode_cuda_graph only under MLP sync; without it the
         flag stays False and the round still runs here."""
-        runtime = self._runtime()
         for mlp_sync, served in ((False, True), (True, False)):
             with (
                 self.subTest(mlp_sync=mlp_sync),
                 patch.object(self.rt, "require_mlp_sync", return_value=mlp_sync),
             ):
+                runtime = self._runtime()
                 batch = self._batch()
                 batch.can_run_decode_cuda_graph = False
                 del self.calls[:]
