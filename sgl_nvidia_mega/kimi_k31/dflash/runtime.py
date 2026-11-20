@@ -20,7 +20,7 @@ and hands it three whole phases; it subclasses nothing of SGLang's:
   then runs its own round. Every condition is the same on every rank.
 
 It reads the worker only through the binding's exports (``exports``) and states the
-setup it serves as SGLang guard values (``invariants``); on any other setup SGLang
+setup it serves as SGLang guard values (``guards``); on any other setup SGLang
 declines it at startup (one warning naming each mismatch) and runs its stock DFlash
 round beside the target megakernel. The round is SGLang's stock round (b1b3173c7c's
 DFlashRuntime steps with 20c91c3/9f1bb9f's overrides) specialized to that setup.
@@ -141,7 +141,7 @@ SGLANG_MOVED = {
     "srt/speculative/dflash_worker_v2.py:DFlashWorkerV2._can_megakernel_sample": "b4b2f0926f05c18f",
 }
 # What this runtime pulls from SGLang's DFlash worker (kimi_k31_dflash_binding.EXPORTS)
-# and the guard values it serves (kimi_k31_dflash_binding.GUARD);
+# and the guard values it serves (kimi_k31_dflash_binding.GUARDS);
 # test/unit/test_contract.py pins both against SGLang's binding.
 DFLASH_EXPORTS = frozenset(
     {
@@ -167,7 +167,7 @@ DFLASH_EXPORTS = frozenset(
 # The measured setup: TP16 GB300, B1 x 8 rows, selector sampling, compact draft window,
 # FP8 draft KV, KDA target. SGLang declines the runtime on any other setup (e.g. TP8,
 # decode graph bs [1, 2, 4]) and runs its stock round; K31MK_DFLASH_RUNTIME=0 always does.
-DFLASH_INVARIANTS = {
+DFLASH_GUARDS = {
     "platform": "cuda",
     "tp_size": 16,
     "pp_size": 1,
@@ -204,7 +204,7 @@ class K31DFlashRuntime(AuxGraphs, KdaCommit):
     """One per DFlash worker, over the target's ``BuiltK31Verify``."""
 
     exports = DFLASH_EXPORTS
-    invariants = DFLASH_INVARIANTS
+    guards = DFLASH_GUARDS
 
     def __init__(self, binding: Any, built: Any) -> None:
         pull = binding.pull

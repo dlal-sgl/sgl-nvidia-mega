@@ -381,7 +381,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
 
 class K31DFlashRuntimeGuard(unittest.TestCase):
     """SGLang's guard (sglang.srt.kernel_plugins.nvidia.kimi_k31_dflash_binding) against
-    the runtime's declared exports and invariants, on the measured server arguments
+    the runtime's declared exports and guards, on the measured server arguments
     (G0/G2: TP16, page 64, block 8, FP8 draft KV, draft window 1024, decode graph bs
     [1]) and on setups it does not serve."""
 
@@ -397,19 +397,19 @@ class K31DFlashRuntimeGuard(unittest.TestCase):
 
         from sgl_nvidia_mega.kimi_k31.dflash.runtime import K31DFlashRuntime
 
-        self.guard, self.runtime = kimi_k31_dflash_binding, K31DFlashRuntime
+        self.sgl, self.runtime = kimi_k31_dflash_binding, K31DFlashRuntime
         self.addCleanup(reset_context)
         self._publish()
         for patched in (
             get_parallel().override(tp_rank=0),
-            patch.object(self.guard, "is_cuda", return_value=True),
-            patch.object(self.guard, "mambaish_config", return_value=object()),
+            patch.object(self.sgl, "is_cuda", return_value=True),
+            patch.object(self.sgl, "mambaish_config", return_value=object()),
             patch.object(binding, "_gather_tp", side_effect=lambda v, group=None: [v]),
-            patch.object(self.guard, "built_megakernel"),
+            patch.object(self.sgl, "built_megakernel"),
         ):
             patched.__enter__()
             self.addCleanup(patched.__exit__, None, None, None)
-        self.guard.built_megakernel.return_value = types.SimpleNamespace(
+        self.sgl.built_megakernel.return_value = types.SimpleNamespace(
             dflash_runtime=self.PATH
         )
         config = types.SimpleNamespace(dtype=torch.bfloat16)
@@ -459,14 +459,13 @@ class K31DFlashRuntimeGuard(unittest.TestCase):
         )
 
     def test_the_measured_setup_is_served_and_any_other_is_named(self):
-        self.assertEqual(
-            self.guard.check_dflash_runtime(self.runtime, self.worker, self.PATH), []
-        )
+        guard = self.sgl.DFlashGuard(self.runtime.guards)
+        self.assertEqual(guard.unmet(self.worker), [])
         self.worker.block_size = 5
         self.worker._use_aux_graph = False
-        unserved = self.guard.check_dflash_runtime(self.runtime, self.worker, self.PATH)
+        unserved = guard.unmet(self.worker)
         self.assertEqual([m.split()[0] for m in unserved], ["aux_graph", "block_size"])
-        self.assertRegex(unserved[1], r"block_size is 5 .*expected 8")
+        self.assertEqual(unserved[1], "block_size is 5, expected 8")
 
     def test_tp8_or_wider_decode_graphs_decline_to_sglangs_round(self):
         """Setups that ran SGLang's stock DFlash round beside the target megakernel
@@ -474,8 +473,8 @@ class K31DFlashRuntimeGuard(unittest.TestCase):
         for tp_size, graph_bs, key in ((8, (1,), "tp_size"), (16, (1, 2, 4), "decode")):
             with self.subTest(tp_size=tp_size, graph_bs=graph_bs):
                 self._publish(tp_size=tp_size, graph_bs=graph_bs)
-                with self.assertLogs(self.guard.logger, "WARNING") as logs:
-                    bound = self.guard.bind_dflash_runtime(self.worker, None)
+                with self.assertLogs(self.sgl.logger, "WARNING") as logs:
+                    bound = self.sgl.bind_dflash_runtime(self.worker, None)
                 self.assertIsNone(bound)
                 (warning,) = logs.output
                 self.assertIn("does not serve this DFLASH setup", warning)
