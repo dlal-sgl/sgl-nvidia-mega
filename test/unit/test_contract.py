@@ -12,7 +12,7 @@ with the digest of its code, so a changed branch fails here too. Code moved out 
 SGLang into the package is listed in ``SGLANG_MOVED`` the same way: while SGLang still
 defines it, both copies must be the same code; once SGLang drops it, the pin retires.
 A DFlash runtime declares the worker exports it pulls (``DFLASH_EXPORTS``) and the
-guard values it serves (``DFLASH_INVARIANTS``); SGLang's DFlash binding must export and
+guard values it serves (``DFLASH_GUARDS``); SGLang's DFlash binding must export and
 guard each by name. A file that moved between SGLang versions is named newest first,
 ``"new.py|old.py"``; the first one present is checked. A read name such as
 "replication|layout" accepts either field.
@@ -531,8 +531,8 @@ def test_the_dflash_binding_exports_and_guards_what_the_runtime_declares(path):
         _assigned(binding, "EXPORTS")
     )
     assert not missing, f"{_id(path)}: SGLang does not export {sorted(missing)}"
-    unguarded = _strings(_assigned(runtime, "DFLASH_INVARIANTS")) - _strings(
-        _assigned(binding, "GUARD")
+    unguarded = _strings(_assigned(runtime, "DFLASH_GUARDS")) - _strings(
+        _assigned(binding, "GUARDS")
     )
     assert not unguarded, f"{_id(path)}: SGLang has no guard key {sorted(unguarded)}"
 
