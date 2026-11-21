@@ -29,7 +29,7 @@ full.
 - Megakernel code (a model's forward and its kernels, and its speculative
   decoding rounds) lives in this package. SGLang keeps only a binding to it.
 - Small, general optimizations go to SGLang itself, for every setup they help.
-- Do not add environment variables that switch features on or off.
+- Do not add an environment variable that is always on or always off.
 - Decide where a path runs from what it needs, not from the one configuration it
   was measured on.
 - `sm103/` and `sm107/` share no code.
@@ -172,22 +172,22 @@ When a setup cannot run a path:
 
 Never fall back silently.
 
-### No feature switches
+### Environment variables
 
-A user turns the megakernel on with `--enable-nvidia-megakernel` and sets
-nothing else.
+The aim is that a user turns the megakernel on with `--enable-nvidia-megakernel`
+and needs no other setting.
 
-- Do not add an environment variable that turns a feature on or off. If every
-  supported setup should run the new path, make it the only path and delete
-  the old one. If no setup should run it, delete it instead of merging it
-  switched off.
+- Do not add an environment variable that would always be set the same way. If
+  the new path should always run, make it the only path and delete the old one.
+  If it should never run, do not merge it.
+- Prefer deciding in code over adding a switch: if a path suits some setups and
+  not others, check the setup (see [Where a path runs](#where-a-path-runs)).
 - Remove the debug and A/B switches you used while developing before the PR
   merges. Values found by a tuning sweep become constants or per-shape tables in
   the code.
-- The only environment variables a change may add are test hooks. A test hook
-  enables test-only behavior (a parity check, fault injection); serving never
-  sets it. It is set only by the tests that need it, named with the
-  `SGLANG_NVIDIA_MEGAKERNEL_` prefix, and described in those tests.
+- A test hook enables test-only behavior (a parity check, fault injection);
+  serving never sets it. Set it only in the tests that need it, name it with the
+  `SGLANG_NVIDIA_MEGAKERNEL_` prefix, and describe it in those tests.
 - If the model needs an SGLang environment variable, declare it in the spec
   (`Requirements.env`) so that startup names it when it is missing. For
   `--enable-nvidia-megakernel` to set it for the user, it must be listed in
@@ -197,11 +197,10 @@ nothing else.
   runs every step's stock code. A new kernel is added as a slot that runs by
   default, not as a slot users must list.
 
-The package still has feature variables from before this rule, and
-`SGLANG_NVIDIA_MEGAKERNEL_SLOTS` still carries some user settings: its `sm148`
-entry admits 148-SM GPUs (B300, and B200/GB200 for Kimi K3 and K3.1), and the
-README describes turning slots off with it. These are being removed; do not add
-new ones or new readers of the existing ones.
+Many existing variables are always set one way in practice, and
+`SGLANG_NVIDIA_MEGAKERNEL_SLOTS` also carries some user settings (its `sm148`
+entry admits 148-SM GPUs: B300, and B200/GB200 for Kimi K3 and K3.1). These are
+being cleaned up; do not add more like them.
 
 ### Invariants
 
