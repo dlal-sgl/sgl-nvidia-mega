@@ -7,8 +7,8 @@ plugin: `sgl_nvidia_mega/plugin.py` maps each HF architecture to a spec
 megakernel after the model loads, and runs the steps it covers; every other
 step runs SGLang's own code.
 
-This file is for coding agents. Read it before you edit anything. It has three
-parts:
+This is the guide for contributing to this repository, written for coding
+agents. Read it before you edit anything. It has three parts:
 
 1. [Dev guide](#1-dev-guide): what belongs here and how to write it.
 2. [Contribution guide](#2-contribution-guide): how to submit it.
@@ -20,9 +20,7 @@ replaces the stock code; **stock** code is the step as SGLang (or this package's
 copy of SGLang's step) runs it without the megakernel's kernels.
 
 [README.md](README.md) describes what each model's megakernel covers and how to
-launch it. [CONTRIBUTING.md](CONTRIBUTING.md) is the guide for human
-contributors and defines the accuracy and performance comparison protocol in
-full.
+launch it.
 
 ## 1. Dev guide
 
@@ -213,18 +211,50 @@ being cleaned up; do not add more like them.
 
 ## 2. Contribution guide
 
+### The flow
+
+```mermaid
+flowchart LR
+    A["SGLang PR<br/>Bindings → CI → Merge"]
+    B["Mega PR<br/>Unit tests + run-ci-sglang label"]
+    C["SGLang GPU CI<br/>Accuracy & Performance vs. Baseline"]
+
+    A --> B --> C
+    C -->|"Pass + Review"| D["Merge Mega PR"]
+```
+
+1. **SGLang bindings, if the change needs them.** Open an SGLang PR for the
+   interfaces, bindings or runtime hooks the package needs, and link it from the
+   Mega PR. If SGLang `main` already has them, start with the Mega PR.
+2. **Merge the SGLang PR through SGLang's own CI.** Keep it compatible with this
+   repository's current `main`.
+3. **Open the Mega PR against `main`** with the implementation, its unit tests
+   and its E2E tests, and fill in the PR template.
+4. **Run the local checks and request GPU CI.** Run `pre-commit run --all-files`
+   and the unit tests. A maintainer adds the `run-ci-sglang` label, which runs
+   the E2E tests on SGLang's GPU CI (see the [CI test guide](#3-ci-test-guide)).
+5. **Read the result on the Mega PR** (the `sglang-ci/megakernel` status) and
+   fix what fails. A fix that belongs in SGLang goes through steps 1 and 2 again;
+   a maintainer then removes and re-adds the label for a fresh run.
+6. **Merge** after the required checks pass and a code owner from
+   `.github/CODEOWNERS` approves. A result describes one SGLang and Mega commit
+   pair; record both SHAs.
+
 ### Changes that span SGLang and this repository
 
-- An interface this package needs lands in SGLang through an SGLang PR and
-  SGLang's own CI. The Mega PR's GPU tests run against SGLang `main`, so its
-  integration result counts only once the SGLang change is on `main`. Link the
-  two PRs to each other, and merge the SGLang PR first or both together.
+- The Mega PR's GPU tests run against SGLang `main`, so its result counts only
+  once the SGLang change is on `main`. When the two must land at the same time
+  (as #77 with sgl-project/sglang#51676), merge the SGLang PR first and the Mega
+  PR right after.
 - Keep this repository's `main` working with SGLang `main` at every step. To
   replace an interface: add the new one in SGLang, move this package to it, then
   remove the old one.
 - The CPU unit tests run against the SGLang commit pinned as `SGLANG_COMMIT` in
   `.github/workflows/unit-test.yml`. A read that the pinned SGLang lacks must be
   optional or skipped by name. Moving the pin is a PR of its own.
+- Nightly SGLang images take this repository's `main` as of their build; SGLang
+  release images record the Mega commit they were validated with. A Mega PR
+  needs no Docker change.
 
 ### Branch, checks and pull request
 
@@ -236,9 +266,17 @@ being cleaned up; do not add more like them.
   the title becomes the commit title on `main`.
 - Fill in every section of the
   [PR template](.github/pull_request_template.md). For each affected model and
-  hardware setup, give the commands, the SGLang and Mega SHAs, the hardware and
-  topology, links to the runs, and every measurement-only setting (for example
-  forced speculative acceptance) next to the number it affects.
+  hardware setup, give the commands, the SGLang and Mega SHAs, the model
+  revision, the hardware and topology, links to the runs, and every
+  measurement-only setting (for example forced speculative acceptance) next to
+  the number it affects. Summarize the results in this table, and mark missing
+  coverage explicitly:
+
+  | Model / hardware / configuration | Test | Native SGLang baseline | Mega candidate | Difference / variation | Verdict and evidence |
+  | --- | --- | --- | --- | --- | --- |
+  | Affected case | Accuracy | Measured result | Measured result | Matched comparison | Result and link |
+  | Same case | Performance | Measured result | Measured result | Relative change and noise | Result and link |
+
 - A new model adds, in the same PR: its entries in `SPECS`, its unit tests, its
   E2E tests and its entry in `test/e2e/ci_models.yaml`, its row in the README's
   supported-models table, and one line in `.github/CODEOWNERS` naming its owner.
@@ -306,7 +344,11 @@ python -m pytest test/unit -v -rfE
     every slot off, the megakernel's stock step must reproduce SGLang's
     (`test_deepseek_v41_switch.py`, `test_qwen3_5_stock_parity.py`).
 
-  CONTRIBUTING.md defines the comparison protocol in full.
+  A case is one model or checkpoint, GPU, GPU count, TP/EP layout, precision,
+  speculative-decoding setup and workload. A pass on GB300 does not qualify
+  B300 or another GPU, and a pass at one layout does not qualify another.
+  [The comparison protocol](#the-comparison-protocol) below says how to run the
+  accuracy and performance tests.
 - Today's tests do not meet that yet. DeepSeek-V4.1-Flash's serving test
   (`test_deepseek_v41_server.py`) launches only the megakernel and checks
   GSM8K against an absolute bound; no model has a paired accuracy and
@@ -321,3 +363,46 @@ python -m pytest test/unit -v -rfE
   already running.
 - A setup the CI runner cannot hold still keeps its tests in `test/e2e/`. Run
   them by hand on the hardware they name and attach the results to the PR.
+
+### The comparison protocol
+
+**The two arms.** The baseline is native SGLang with the megakernel off. The
+candidate is the same SGLang commit with the Mega PR installed and
+`--enable-nvidia-megakernel` on. Turning slots off with the plugin still enabled
+is a diagnostic, not this baseline.
+
+- Use the same hardware, model revision, tokenizer, precision, TP/EP layout,
+  server settings, requests and decoding parameters in both arms, and keep the
+  SGLang and Mega SHAs fixed for the whole comparison.
+- Run the arms one after the other, not side by side, so they do not compete
+  for GPU memory or compute.
+- Check that the candidate actually runs the megakernel path under test (the
+  `NVIDIA megakernel: active` log line and the path's own log lines) and that
+  the baseline does not.
+
+**Accuracy.**
+
+- Run the same evaluation on both arms. The baseline score is the reference;
+  a fixed score such as a GSM8K threshold is not.
+- Choose the comparison rule for the metric and its noise before you measure
+  the candidate, and make the test print a verdict, not two numbers.
+- Investigate any drop; repeat matched runs to tell a regression from noise.
+  Do not accept a lower score silently or change the evaluation set after
+  seeing a result.
+- Use real model outputs and normal speculative acceptance: no simulated
+  acceptance or other performance-only settings. A bitwise parity test adds to
+  task accuracy; it does not replace it.
+
+**Performance.**
+
+- Warm both arms up the same way, then measure the same workload. Keep
+  compilation and model loading out of the steady-state numbers.
+- Report the metric the change targets: tokens per second per user, total
+  throughput, time to first token or inter-token latency. When the change moves
+  the boundary between the megakernel and the stock path, measure on both sides
+  of it.
+- Repeat the measurement and report the variation with the relative change. A
+  speed-up counts only if it exceeds the noise. Investigate a regression instead
+  of averaging it away.
+- State every measurement-only setting, such as forced acceptance, with the
+  numbers. Accuracy must pass on its own, whatever the speed-up.
