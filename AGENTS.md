@@ -231,8 +231,9 @@ flowchart LR
 3. **Open the Mega PR against `main`** with the implementation, its unit tests
    and its E2E tests, and fill in the PR template.
 4. **Run the local checks and request GPU CI.** Run `pre-commit run --all-files`
-   and the unit tests. A maintainer adds the `run-ci-sglang` label, which runs
-   the E2E tests on SGLang's GPU CI (see the [CI test guide](#3-ci-test-guide)).
+   and the unit tests. A maintainer adds the label of the model the PR changes,
+   `run-ci-sglang:<model>`, which runs that model's E2E tests on SGLang's GPU CI
+   (see the [CI test guide](#3-ci-test-guide)).
 5. **Read the result on the Mega PR** (the `sglang-ci/megakernel` status) and
    fix what fails. A fix that belongs in SGLang goes through steps 1 and 2 again;
    a maintainer then removes and re-adds the label for a fresh run.
@@ -298,7 +299,7 @@ checks must pass as well; they are not tests.)
 | --- | --- | --- |
 | Location | `test/unit/` | `test/e2e/` |
 | Runs on | this repository's CI, CPU only | SGLang's GPU CI |
-| Started by | every push to a PR | the `run-ci-sglang` label (see below) |
+| Started by | every push to a PR | a `run-ci-sglang:<model>` or `run-ci-sglang` label (see below) |
 | SGLang | the pinned `SGLANG_COMMIT` | SGLang `main` |
 
 Do not add tests under `test/kernels/`; those are legacy standalone kernel tests
@@ -321,14 +322,23 @@ python -m pytest test/unit -v -rfE
 
 ### E2E tests
 
-- A maintainer adds the `run-ci-sglang` label to the PR. This repository's
-  `run-ci-sglang.yml` then dispatches SGLang's `pr-test-megakernel.yml` with the
-  PR's head SHA, and reports the outcome as the `sglang-ci/megakernel` status on
-  the PR. SGLang installs the PR on its current `main` and runs only
+- **Use the per-model label first.** `run-ci-sglang:<model>` runs only that
+  model's E2E tests, where `<model>` is its key in `test/e2e/ci_models.yaml`
+  (for example `run-ci-sglang:deepseek_v41`). Add one label for each model the
+  PR changes; several model labels run those models together. `run-ci-sglang`
+  runs every model, and wins when both kinds are on; keep it for changes that
+  affect every model (shared code, CI). The GPU runner is shared and has a
+  queue, so do not run models the PR does not touch.
+- A maintainer adds the label. This repository's `run-ci-sglang.yml` then
+  dispatches SGLang's `pr-test-megakernel.yml` with the PR's head SHA and the
+  selected models, and reports the outcome as the `sglang-ci/megakernel` status
+  on the PR. SGLang installs the PR on its current `main` and runs only
   `test/e2e/`. Record the run link and both SHAs in the PR.
-- While the label stays on a PR from a branch of this repository, each push or
+- While a label stays on a PR from a branch of this repository, each push or
   reopen dispatches a new run and cancels the one in progress. A PR from a fork
   runs again only when a maintainer applies the label again.
+- The model labels follow `ci_models.yaml`: when an entry is added on `main`,
+  its `run-ci-sglang:<model>` label is created.
 - `test/e2e/ci_models.yaml` chooses what runs. Each key is a model; `gpu` and
   `gpus` give the GPU type and the number of GPUs on one host its tests need, and
   `tests` lists its test files. A `test_*.py` file that no model lists never
