@@ -75,19 +75,9 @@ as ordinary SGLang PRs and extend them to most setups, with or without the
 megakernel, instead of keeping them on the megakernel path. Turn them on wherever
 they apply, not behind a switch.
 
-**The cost.** SGLang cannot see the code behind its bindings, so an SGLang
-change can break this package without failing SGLang's own CI. Two things catch
-that, and both have gaps today, so keep them current with every change:
-
-- The contract tests. CI runs them only against the pinned SGLang
-  (`SGLANG_COMMIT`), and they skip, by name, every check whose SGLang side that
-  commit lacks; the Kimi K3.1 checks are all skipped at the current pin. When a
-  change touches a binding that only SGLang `main` has, also run
-  `test/unit/test_contract.py` locally against SGLang `main`.
-- The E2E runs against SGLang `main`. They cover only the models listed in
-  `test/e2e/ci_models.yaml` that fit the CI runner.
-
-The split is accepted because it keeps SGLang `main` readable.
+This has a risk: SGLang cannot see the code behind its bindings, so an SGLang
+change can break this package. We accept it to keep SGLang `main` readable; the
+contract tests and E2E tests are what catch such breaks.
 
 ### Moving megakernel code out of SGLang
 
@@ -156,9 +146,9 @@ the installed SGLang:
   it.
 - A DFlash runtime lists the worker names it binds in `DFLASH_BINDINGS`, which
   SGLang's binding must provide, and sets `DFLASH_GUARDS = {}`.
-- CI runs these checks against the pinned SGLang only; see "The cost" under
-  [What belongs here](#what-belongs-here) for when to run them against SGLang
-  `main` as well.
+- CI runs these checks only against the pinned SGLang (`SGLANG_COMMIT`), and
+  skips those whose SGLang side it lacks. When you change a binding that only
+  SGLang `main` has, also run `test/unit/test_contract.py` against SGLang `main`.
 
 ### Where a path runs
 
