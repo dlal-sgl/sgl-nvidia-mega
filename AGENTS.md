@@ -24,19 +24,6 @@ launch it. [CONTRIBUTING.md](CONTRIBUTING.md) is the guide for human
 contributors and defines the accuracy and performance comparison protocol in
 full.
 
-## The rules at a glance
-
-- Megakernel code (a model's forward and its kernels, and its speculative
-  decoding rounds) lives in this package. SGLang keeps only a binding to it.
-- Small, general optimizations go to SGLang itself, for every setup they help.
-- Do not add an environment variable that is always on or always off.
-- Decide where a path runs from what it needs, not from the one configuration it
-  was measured on.
-- `sm103/` and `sm107/` share no code.
-- Tests are unit tests (this repository's CI) and E2E tests (SGLang's GPU CI).
-  Do not add standalone kernel tests.
-- Report only what ran. Never weaken a test to make it pass.
-
 ## 1. Dev guide
 
 ### What belongs here
