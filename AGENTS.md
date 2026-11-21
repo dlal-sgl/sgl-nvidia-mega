@@ -331,9 +331,12 @@ python -m pytest test/unit -v -rfE
   runs again only when a maintainer applies the label again.
 - `test/e2e/ci_models.yaml` chooses what runs. Each key is a model; `gpu` and
   `gpus` give the GPU type and the number of GPUs on one host its tests need, and
-  `tests` lists its test files. The CI runner has four GB300 GPUs: a model that
-  needs a different GPU or more GPUs is skipped with a notice, and a `test_*.py`
-  file that no model lists never runs.
+  `tests` lists its test files. A `test_*.py` file that no model lists never
+  runs.
+- **Today SGLang's GPU CI has only a four-GPU GB300 runner.** A model whose
+  tests need eight GPUs on one host or another GPU type, such as Qwen3.5 at
+  TP8, is skipped with a notice; run its tests by hand (see the last item). Once
+  an eight-GPU runner is added, CI will run those models as well.
 - Each supported model and hardware setup needs:
   - **an accuracy test** against native SGLang with the megakernel off, on the
     same SGLang SHA and evaluation set, ending in a comparison verdict rather
