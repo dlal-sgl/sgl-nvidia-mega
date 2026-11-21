@@ -333,10 +333,14 @@ python -m pytest test/unit -v -rfE
   `gpus` give the GPU type and the number of GPUs on one host its tests need, and
   `tests` lists its test files. A `test_*.py` file that no model lists never
   runs.
-- **Today SGLang's GPU CI has only a four-GPU GB300 runner.** A model whose
-  tests need eight GPUs on one host or another GPU type, such as Qwen3.5 at
-  TP8, is skipped with a notice; run its tests by hand (see the last item). Once
-  an eight-GPU runner is added, CI will run those models as well.
+- **Today SGLang's GPU CI has only a four-GPU GB300 runner.** Every model with
+  a supported setup that fits on it (TP4 or smaller on GB300) runs that setup in
+  CI now. Today only DeepSeek-V4.1-Flash does; GLM-5.3/5.2 at TP4, Muse Spark at
+  TP4 and Qwen3.5 at TP4 (its spec admits it) still need E2E tests and
+  `ci_models.yaml` entries. A setup that needs eight GPUs on one host or another
+  GPU type, such as Qwen3.5 at TP8 or Kimi K3 and K3.1, is skipped with a notice;
+  run its tests by hand (see the last item). Once an eight-GPU runner is added,
+  CI will run those setups as well.
 - Each supported model and hardware setup needs:
   - **an accuracy test** against native SGLang with the megakernel off, on the
     same SGLang SHA and evaluation set, ending in a comparison verdict rather
