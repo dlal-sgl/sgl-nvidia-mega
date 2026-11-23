@@ -292,7 +292,7 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             "get_parallel": lambda: types.SimpleNamespace(tp_rank=0),
             "get_exec": lambda: graphs,
             "get_spec": lambda: self.spec,
-            "apply_dflash_verify_logits_adjustments": lambda **kw: log("adjust"),
+            "adjust_verify_logits": lambda *a, **kw: log("adjust"),
             "_prepare_dflash_draft_block_unchecked": lambda **kw: log("prepare_block"),
             "ForwardBatch": lambda **kw: log("forward_batch") or kw,
             "DFlashVerifyInput": lambda **kw: verify_input,
@@ -338,6 +338,8 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             temperatures=torch.ones(1, 1),
             top_ks=torch.tensor([20]),
             penalizer_orchestrator=None,
+            step_penalties=None,
+            watermark=None,
             has_custom_logit_processor=False,
             grammar_mask=None,
             logit_bias=None,
@@ -433,6 +435,8 @@ class K31DFlashRuntimeRound(unittest.TestCase):
             "top_p": dict(need_top_p_sampling=True),
             "top_k": dict(need_top_k_sampling=True),
             "logit bias": dict(logit_bias=torch.zeros(1)),
+            "penalties": dict(step_penalties=object()),
+            "watermark": dict(watermark=object()),
             "sampling mask": dict(sampling_mask_batch_indices=[0]),
         }
         for name, fields in [*cases.items(), *sampling.items()]:

@@ -54,16 +54,13 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.model_executor.forward_mode import CaptureHiddenMode, ForwardMode
 from sglang.srt.runtime_context import get_exec, get_parallel, get_spec
+from sglang.srt.sampling.sampling_batch_info import adjusts_logits
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
-from sglang.srt.speculative.dflash_utils import (
-    apply_dflash_simulated_acceptance,
-    apply_dflash_verify_logits_adjustments,
-)
+from sglang.srt.speculative.dflash_utils import apply_dflash_simulated_acceptance
 from sglang.srt.speculative.dflash_worker_v2 import (
     _commit_accept,
     _is_all_greedy,
     _resolve_dflash_embedding_module,
-    _verify_logits_unadjusted,
 )
 from sglang.srt.speculative.draft_worker_common import make_draft_input_v2
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
@@ -73,6 +70,7 @@ from sglang.srt.speculative.spec_utils import (
     SIMULATE_ACC_TOKEN_MODE,
     draft_tp_context,
 )
+from sglang.srt.speculative.target_verify import adjust_verify_logits
 
 from .aux_graphs import AuxGraphs
 from .commit import KdaCommit
@@ -108,15 +106,14 @@ SGLANG_READS = {
     "srt/speculative/dflash_info.py": ("DFlashVerifyInput", "prepare_for_verify"),
     "srt/speculative/dflash_utils.py": (
         "apply_dflash_simulated_acceptance",
-        "apply_dflash_verify_logits_adjustments",
         "is_domino",
     ),
     "srt/speculative/dflash_worker_v2.py": (
         "_commit_accept",
         "_is_all_greedy",
         "_resolve_dflash_embedding_module",
-        "_verify_logits_unadjusted",
     ),
+    "srt/speculative/target_verify.py": ("adjust_verify_logits",),
     "srt/speculative/draft_worker_common.py": ("make_draft_input_v2",),
     "srt/speculative/spec_info.py": ("SpeculativeAlgorithm",),
     "srt/speculative/spec_utils.py": (
@@ -144,9 +141,12 @@ SGLANG_READS = {
         "kv_allocated_len",
     ),
     "srt/sampling/sampling_batch_info.py": (
+        "adjusts_logits",
         "temperatures",
         "need_top_k_sampling",
         "need_top_p_sampling",
+        "sampling_mask_batch_indices",
+        "has_custom_logit_processor",
     ),
 }
 # SGLang code moved here (test/unit/test_contract.py): while SGLang still defines it,
@@ -461,8 +461,12 @@ class K31DFlashRuntime:
             return "logprobs"
         if sampling_info is None:
             return None
-        # Nor penalties, logit bias, custom processors or sampling masks.
-        if not _verify_logits_unadjusted(sampling_info):
+        # Nor penalties, logit bias, custom processors, watermarks or sampling masks
+        # (as SGLang's round's _can_skip_verify_logits; the grammar is handed back above).
+        if (
+            adjusts_logits(sampling_info, has_grammar=False)
+            or sampling_info.sampling_mask_batch_indices is not None
+        ):
             return "adjusted logits"
         if not sampled:
             return None
@@ -724,12 +728,16 @@ class K31DFlashRuntime:
                 target_predict = target_lp.deferred_argmax(shard)
                 logits_output.next_token_logits = None
             else:
-                # SGLang's round adjusts gathered logits before its greedy argmax.
-                apply_dflash_verify_logits_adjustments(
-                    next_token_logits=shard,
-                    sampling_info=sampling_info,
-                    draft_token_num=int(self.block_size),
-                )
+                # SGLang's round adjusts gathered logits before its greedy argmax
+                # (its shared verify stage; no grammar mask: _unserved).
+                if sampling_info is not None:
+                    adjust_verify_logits(
+                        shard,
+                        sampling_info=sampling_info,
+                        grammar_mask=None,
+                        draft_tokens=draft_tokens,
+                        has_custom_logit_processor=sampling_info.has_custom_logit_processor,
+                    )
                 target_predict = torch.argmax(shard, dim=-1)
             return self._accept_block(
                 candidates=draft_tokens,
