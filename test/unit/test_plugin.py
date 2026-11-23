@@ -30,10 +30,20 @@ def test_register_registers_every_spec_and_no_hook(hooks, monkeypatch):
     plugin.register()
     assert registry._REGISTRY == dict(plugin.SPECS)
     assert hooks == []
-    # Every registered path resolves to the spec SGLang checks.
-    for architecture, _ in plugin.SPECS:
-        spec, why = registry.find_spec(architectures=[architecture], isa="sm_103")
-        assert spec is not None, (architecture, why)
+
+
+@pytest.mark.parametrize(
+    "architecture", [architecture for architecture, _ in plugin.SPECS]
+)
+def test_every_registered_spec_resolves_at_this_sglangs_api_version(
+    hooks, monkeypatch, architecture
+):
+    # find_spec refuses a spec written against another megakernel API version.
+    monkeypatch.delenv(plugin.PARITY_SORT_ENV, raising=False)
+    plugin.register()
+    spec, why = registry.find_spec(architectures=[architecture], isa="sm_103")
+    assert spec is not None, why
+    assert spec.api_version == registry.MEGAKERNEL_API_VERSION
 
 
 def test_the_parity_sort_hook_registers_only_for_its_test(hooks, monkeypatch):

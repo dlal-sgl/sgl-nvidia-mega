@@ -75,7 +75,7 @@ if TYPE_CHECKING:
 
 WIDTHS = DECODE_WIDTHS
 # Keep this independent of the host constant so find_spec rejects incompatibility.
-REQUIRED_MEGAKERNEL_API_VERSION = 2
+REQUIRED_MEGAKERNEL_API_VERSION = 3
 
 # Names read from SGLang internals. A contract test checks these before GPU use.
 SGLANG_READS = {

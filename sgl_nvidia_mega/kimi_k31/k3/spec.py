@@ -7,11 +7,6 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any, cast
 
-try:
-    import sglang.kernels.plugin_kernels.nvidia.spec as _host_spec
-except ModuleNotFoundError:  # SGLang before sgl-project/sglang#45389
-    import sglang.srt.megakernels.spec as _host_spec
-
 from sglang.srt.runtime_context import get_model
 
 from sgl_nvidia_mega.kimi_k31.k3._host import (  # noqa: E402
@@ -30,10 +25,8 @@ if TYPE_CHECKING:
     from sgl_nvidia_mega.kimi_k31.k3._host import PreparationView
 
 WIDTHS = (1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64)
-# Keep this independent of the host constant so find_spec rejects incompatibility: the
-# built objects offer API 2's optional EAGLE entries and graph_variants (all None), so
-# a host with that contract (it defines ENTRIES) gets 2, an older one 1.
-REQUIRED_MEGAKERNEL_API_VERSION = 2 if hasattr(_host_spec, "ENTRIES") else 1
+# Keep this independent of the host constant so find_spec rejects incompatibility.
+REQUIRED_MEGAKERNEL_API_VERSION = 3
 
 # Names read from SGLang internals. A contract test checks these before GPU use.
 SGLANG_READS = {
@@ -158,7 +151,7 @@ class _Built:
     """Top-level model-forward replacement for the exact decode shapes served."""
 
     draft_sampler = None
-    # Megakernel API 2: no EAGLE entries, no graph variants of the host's runners.
+    # No EAGLE entries, no graph variants of the host's runners.
     draft_loop = draft_extend = begin_draft_round = graph_variants = None
     # no speculative runtime hooks factory: SGLang keeps its own strategies
     speculative_runtime_hooks = None

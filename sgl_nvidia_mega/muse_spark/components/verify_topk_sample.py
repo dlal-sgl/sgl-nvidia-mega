@@ -107,6 +107,7 @@ SGLANG_READS = {
     "srt/speculative/dflash_utils.py": ("_get_or_create_chain_verify_buffers",),
     "srt/layers/logits_processor.py": ("LogitsProcessor",),
     "srt/plugins/hook_registry.py": ("HookRegistry", "HookType"),
+    "srt/sampling/sampling_batch_info.py": ("step_penalties",),
 }
 
 
@@ -1044,11 +1045,9 @@ def eligible(worker, batch, sinfo) -> tuple[str | None, int]:
         return "block verification", 0
     if batch.has_grammar or batch.return_logprob:
         return "grammar or logprobs", 0
-    penalizer = sinfo.penalizer_orchestrator
     if (
         sinfo.has_custom_logit_processor
-        or getattr(sinfo, "acc_linear_penalties", None) is not None
-        or (penalizer is not None and penalizer.is_required)
+        or sinfo.step_penalties is not None
         or getattr(sinfo, "grammar_mask", None) is not None
         or getattr(sinfo, "logit_bias", None) is not None
         or sinfo.sampling_mask_batch_indices is not None

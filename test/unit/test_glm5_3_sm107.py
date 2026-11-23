@@ -139,6 +139,127 @@ def test_the_context_must_be_one_request_of_eight_tokens(mk):
         mk._check_context(types.SimpleNamespace(tokens_per_request=4, widths=(4, 8)))
 
 
+def _sampling(**fields):
+    """One greedy request's SamplingBatchInfo with ``fields`` set."""
+    import torch
+    from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
+
+    return SamplingBatchInfo(
+        vocab_size=16,
+        temperatures=torch.ones(1, 1),
+        top_ps=torch.ones(1),
+        top_ks=torch.ones(1, dtype=torch.int32),
+        min_ps=torch.zeros(1),
+        is_all_greedy=True,
+        is_any_greedy=True,
+        need_top_p_sampling=False,
+        need_top_k_sampling=False,
+        need_min_p_sampling=False,
+        **fields,
+    )
+
+
+def test_the_fused_verify_tail_hands_back_a_step_with_penalties():
+    from sgl_nvidia_mega.glm5_3.sm107.verify_tail import VerifyTail
+
+    def reasons(sampling_info):
+        batch = types.SimpleNamespace(
+            seq_lens=[1],
+            has_grammar=False,
+            return_logprob=False,
+            sampling_info=sampling_info,
+        )
+        return VerifyTail.uncovered(types.SimpleNamespace(draft_token_num=8), batch)
+
+    assert reasons(_sampling()) == []
+    assert reasons(_sampling(step_penalties=object())) == ["penalty"]
+
+
+def test_the_step_graph_hands_back_a_step_with_penalties():
+    import torch
+    from sglang.srt.model_executor.forward_batch_info import ForwardMode
+
+    from sgl_nvidia_mega.spec_step.runner import EagleStepCudaGraphRunner
+
+    runner = types.SimpleNamespace(
+        worker=types.SimpleNamespace(speculative_num_steps=3)
+    )
+
+    def reason(**sampling):
+        batch = types.SimpleNamespace(
+            forward_mode=ForwardMode.DECODE,
+            seq_lens=torch.ones(1, dtype=torch.int64),
+            spec_info=types.SimpleNamespace(is_verify_input=lambda: False),
+            return_logprob=False,
+            return_hidden_states=False,
+            has_grammar=False,
+            seq_lens_cpu=None,
+            seq_lens_sum=None,
+            hisparse_coordinator=None,
+            mamba_track_indices=None,
+            multimodal_inputs=None,
+            sampling_info=_sampling(**sampling),
+        )
+        return EagleStepCudaGraphRunner._ineligible_reason(runner, batch, None)
+
+    assert reason(step_penalties=object()) == "penalties"
+    assert reason(logit_bias=torch.zeros(1, 16)) == "logit bias"
+
+
+def test_the_lifted_eagle_sample_applies_each_rows_penalties_along_the_tree():
+    import unittest.mock
+
+    import sglang.srt.speculative.eagle_utils as eagle_utils
+    import torch
+    from sglang.srt.model_executor.forward_batch_info import ForwardMode
+
+    class Applied(Exception):
+        pass
+
+    class Penalties:
+        def apply_verify(self, *args):
+            self.args = args
+            raise Applied  # the first logit adjustment; nothing after it is checked
+
+    bs, width = 2, 3
+    penalties = Penalties()
+    verify_input = types.SimpleNamespace(
+        draft_token=torch.arange(bs * width),
+        draft_token_num=width,
+        retrieve_next_token=torch.tensor([[1, 2, -1], [1, -1, -1]]),
+        retrieve_next_sibling=torch.tensor([[-1, -1, -1], [-1, 2, -1]]),
+    )
+    batch = types.SimpleNamespace(
+        device="cpu",
+        forward_mode=ForwardMode.TARGET_VERIFY,
+        seq_lens=torch.ones(bs, dtype=torch.int64),
+        sampling_info=_sampling(step_penalties=penalties),
+    )
+    logits = torch.zeros(bs * width, 16)
+    # The lifted module imports the fused draft-extend tail, a Triton kernel this
+    # test does not reach, and _rebind adds the lifted helpers to SGLang's module:
+    # both stay inside the test.
+    ops = types.ModuleType("sgl_nvidia_mega.spec_step.ops")
+    ops.draft_extend_tail = None
+    with (
+        unittest.mock.patch.dict(sys.modules, {ops.__name__: ops}),
+        unittest.mock.patch.dict(vars(eagle_utils)),
+    ):
+        sys.modules.pop("sgl_nvidia_mega.spec_step.lifted", None)
+        from sgl_nvidia_mega.spec_step import hooks
+
+        eagle_sample = hooks._eagle_sample()
+        with pytest.raises(Applied):
+            eagle_sample(
+                verify_input, batch, types.SimpleNamespace(next_token_logits=logits)
+            )
+    applied_logits, draft_tokens, next_child, next_sibling = penalties.args
+    assert applied_logits is logits
+    assert torch.equal(draft_tokens, verify_input.draft_token.view(bs, width))
+    assert next_child is verify_input.retrieve_next_token
+    assert next_sibling is verify_input.retrieve_next_sibling
+
+
 def test_no_binaries_and_no_cpp():
     # __pycache__ (git-ignored) is written by any test that imported the package first
     found = [

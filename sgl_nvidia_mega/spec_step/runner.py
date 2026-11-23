@@ -95,6 +95,7 @@ SGLANG_READS = {
     ),
     "srt/utils/common.py": ("is_cuda",),
     "srt/managers/schedule_batch.py": ("ScheduleBatch",),
+    "srt/sampling/sampling_batch_info.py": ("step_penalties",),
     "srt/managers/utils.py": ("GenerationBatchResult",),
     "srt/server_args.py": ("ServerArgs",),
     "srt/speculative/eagle_worker_v2.py": ("EAGLEWorkerV2",),
@@ -692,10 +693,7 @@ class EagleStepCudaGraphRunner:
         sampling_info = batch.sampling_info
         if sampling_info.has_custom_logit_processor:
             return "custom logit processor"
-        if (
-            sampling_info.acc_additive_penalties is not None
-            or sampling_info.acc_scaling_penalties is not None
-        ):
+        if sampling_info.step_penalties is not None:
             return "penalties"
         if sampling_info.logit_bias is not None:
             return "logit bias"
