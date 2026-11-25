@@ -94,15 +94,15 @@ class TestKimiK3Contract(unittest.TestCase):
         registry_patch.start()
         self.addCleanup(registry_patch.stop)
 
-    def test_spec_is_exact_api2_tp8_sm100_sm103_surface(self):
+    def test_spec_is_exact_api3_tp8_sm100_sm103_surface(self):
         from sgl_nvidia_mega.kimi_k3.spec import (
             REQUIRED_MEGAKERNEL_API_VERSION,
             SPEC,
         )
 
-        self.assertEqual(REQUIRED_MEGAKERNEL_API_VERSION, 2)
-        self.assertEqual(SPEC.api_version, 2)
-        self.assertEqual(MEGAKERNEL_API_VERSION, 2)
+        self.assertEqual(REQUIRED_MEGAKERNEL_API_VERSION, 3)
+        self.assertEqual(SPEC.api_version, 3)
+        self.assertEqual(MEGAKERNEL_API_VERSION, 3)
         self.assertEqual(SPEC.requires.isas, frozenset({"sm_100", "sm_103"}))
         self.assertEqual(SPEC.requires.tp_sizes, frozenset({8}))
         self.assertEqual(SPEC.requires.dtypes, frozenset({"bfloat16"}))
@@ -193,7 +193,7 @@ class TestKimiK3Contract(unittest.TestCase):
                     for name in sys.modules
                 )
             )
-            for version in (1, 3):
+            for version in (2, 4):
                 with (
                     self.subTest(version=version),
                     patch.object(registry, "MEGAKERNEL_API_VERSION", version),
@@ -202,7 +202,7 @@ class TestKimiK3Contract(unittest.TestCase):
                         architectures=["KimiK3ForConditionalGeneration"], isa="sm_103"
                     )
                     self.assertIsNone(incompatible)
-                    self.assertIn("uses megakernel API version 2", reason)
+                    self.assertIn("uses megakernel API version 3", reason)
                     self.assertIn(f"requires version {version}", reason)
 
         self.assertIs(parent.kimi_k3, child)
