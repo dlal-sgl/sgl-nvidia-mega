@@ -16,17 +16,7 @@ from unittest.mock import Mock, patch
 
 import torch
 
-try:
-    import sglang.kernels.plugin_kernels.nvidia.spec as registry
-except ModuleNotFoundError as error:
-    if error.name not in (
-        "sglang.kernels",
-        "sglang.kernels.plugin_kernels",
-        "sglang.kernels.plugin_kernels.nvidia",
-        "sglang.kernels.plugin_kernels.nvidia.spec",
-    ):
-        raise
-    import sglang.srt.megakernels.spec as registry
+from sgl_nvidia_mega._sglang_spec import load_spec
 
 try:
     from sglang.srt.kernel_plugins.nvidia.binding import (
@@ -57,6 +47,7 @@ except ModuleNotFoundError as error:
         PreparationView,
     )
 
+registry = load_spec()
 BuildContext = registry.BuildContext
 Feature = registry.Feature
 NumericsKind = registry.NumericsKind
@@ -175,9 +166,8 @@ class TestKimiK3Contract(unittest.TestCase):
                     del sys.modules[name]
             plugin = importlib.import_module("sgl_nvidia_mega.plugin")
             plugin.register()
-            self.assertEqual(
-                registry._REGISTRY["KimiK3ForConditionalGeneration"],
-                "sgl_nvidia_mega.kimi_k3.spec:SPEC",
+            self.assertTrue(
+                registry.spec_registered(["KimiK3ForConditionalGeneration"])
             )
             self.assertFalse(
                 any(name.startswith("sgl_nvidia_mega.kimi_k3") for name in sys.modules)

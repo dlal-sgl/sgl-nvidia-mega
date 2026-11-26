@@ -52,9 +52,9 @@ def _files(pattern: str) -> list:
     """
     for alternative in pattern.split("|"):
         files = sorted(ROOT.glob(alternative))
+        if alternative == "kernels/plugin_kernels/nvidia/spec.py":
+            files.extend(ROOT.glob("kernels/plugin_kernels/megakernel/spec.py"))
         if files:
-            if alternative == "kernels/plugin_kernels/nvidia/spec.py":
-                files.extend(ROOT.glob("kernels/plugin_kernels/megakernel/spec.py"))
             return files
     return []
 
@@ -254,7 +254,7 @@ def _has_k31_host() -> bool:
 
 
 def _has_draft_check() -> bool:
-    return DRAFT_CHECK_NAMES[0] in _provided(_files(DRAFT_CHECK)[0])
+    return any(DRAFT_CHECK_NAMES[0] in _provided(path) for path in _files(DRAFT_CHECK))
 
 
 def _has_dsa_view() -> bool:
